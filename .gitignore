@@ -1,0 +1,48 @@
+# ===== 后端 (Python) =====
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== IDE & 编辑器 =====
+# JetBrains IDEs
+.idea/
+
+# VSCode
+.vscode/
+
+# ===== 系统文件 =====
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# ===== 日志文件 =====
+*.log
+logs/
+
+# ===== 临时文件 =====
+*.tmp
+*.temp
+.cache/ 
+/.history/
+/downloads/

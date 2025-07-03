@@ -1,0 +1,25 @@
+# 知识星球数据采集器配置文件
+# 请在此文件中配置您的认证信息
+
+[auth]
+# 知识星球登录Cookie
+# 获取方法：
+# 1. 打开浏览器，登录知识星球网页版 (https://wx.zsxq.com/)
+# 2. 按F12打开开发者工具
+# 3. 在Network标签页中找到任意API请求
+# 4. 复制请求头中的Cookie值
+cookie = "your_cookie_here"
+
+# 知识星球群组ID
+# 获取方法：
+# 1. 在知识星球网页版中进入目标群组
+# 2. 查看浏览器地址栏，URL中的数字部分即为GROUP_ID
+group_id = "your_group_id_here"
+
+[database]
+# 数据库文件路径
+path = "zsxq_interactive.db"
+
+[download]
+# 下载目录
+dir = "downloads"
