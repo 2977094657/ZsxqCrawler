@@ -43,6 +43,7 @@ logs/
 # ===== 临时文件 =====
 *.tmp
 *.temp
-.cache/ 
+.cache/
 /.history/
 /downloads/
+/output/

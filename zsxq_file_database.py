@@ -8,7 +8,7 @@ class ZSXQFileDatabase:
     def __init__(self, db_path: str = "zsxq_files_complete.db"):
         """初始化数据库连接"""
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.create_tables()
     
@@ -38,9 +38,15 @@ class ZSXQFileDatabase:
             duration INTEGER,
             download_count INTEGER,
             create_time TEXT,
-            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            download_status TEXT DEFAULT 'pending',
+            local_path TEXT,
+            download_time TIMESTAMP
         )
         ''')
+
+        # 执行数据库迁移
+        self._migrate_database()
         
         # 3. 群组表 (topic.group对象)
         self.cursor.execute('''
@@ -689,7 +695,42 @@ class ZSXQFileDatabase:
             stats[table] = self.cursor.fetchone()[0]
         
         return stats
-    
+
+    def _migrate_database(self):
+        """执行数据库迁移，添加新列"""
+        migrations = [
+            {
+                'table': 'files',
+                'column': 'download_status',
+                'definition': 'TEXT DEFAULT "pending"'
+            },
+            {
+                'table': 'files',
+                'column': 'local_path',
+                'definition': 'TEXT'
+            },
+            {
+                'table': 'files',
+                'column': 'download_time',
+                'definition': 'TIMESTAMP'
+            }
+        ]
+
+        for migration in migrations:
+            try:
+                # 检查列是否存在
+                self.cursor.execute(f"PRAGMA table_info({migration['table']})")
+                columns = [column[1] for column in self.cursor.fetchall()]
+
+                if migration['column'] not in columns:
+                    sql = f"ALTER TABLE {migration['table']} ADD COLUMN {migration['column']} {migration['definition']}"
+                    self.cursor.execute(sql)
+                    print(f"📊 添加列: {migration['table']}.{migration['column']}")
+            except Exception as e:
+                print(f"❌ 迁移失败: {migration['table']}.{migration['column']} - {e}")
+
+        self.conn.commit()
+
     def close(self):
         """关闭数据库连接"""
         if self.conn:
