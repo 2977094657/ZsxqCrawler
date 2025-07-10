@@ -1,33 +1,49 @@
 <div align="center">
   <img src="_Image.png" alt="知识星球数据采集器" width="200">
   <h1>🌟 知识星球数据采集器</h1>
-  <p>知识星球内容爬取与文件下载工具，支持话题采集、评论获取、文件批量下载等功能</p>
+  <p>知识星球内容爬取与文件下载工具，支持话题采集、文件批量下载等功能</p>
   
   [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
   [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
   
-  <img src="QQ20250703-170055.png" alt="项目截图" height="400">
+  <img src="info.png" alt="群组详情页面" height="400">
 </div>
 
 ## ✨ 项目特性
 
-
-
 - 🎯 **智能采集**: 支持全量、增量、智能更新等多种采集模式
-- 📁 **文件管理**: 自动下载和管理知识星球中的文件资源
+- 📁 **文件管理**: 自动下载和管理知识星球中的文件资源，支持直接下载
 - 💻 **命令行界面**: 提供强大的交互式命令行工具
-- 📊 **数据存储**: 完整的SQLite数据库存储
-- 🔧 **易部署**: 轻量级部署，无需复杂配置
+- 🌐 **Web界面**: 现代化的React前端界面，操作更直观
 
-## 📦 安装部署
+## 🖼️ 界面展示
 
-### 快速安装
+### Web界面
+
+<div align="center">
+  <img src="home.png" alt="首页界面" height="400">
+  <p><em>首页 - 群组选择和概览</em></p>
+</div>
+
+<div align="center">
+  <img src="config.png" alt="配置页面" height="400">
+  <p><em>配置页面 - 爬取间隔设置</em></p>
+</div>
+
+<div align="center">
+  <img src="log.png" alt="日志页面" height="400">
+  <p><em>日志页面 - 实时任务执行日志</em></p>
+</div>
+
+## 🚀 快速开始
+
+### 1. 安装部署
 
 ```bash
 # 1. 克隆项目
 git clone https://github.com/2977094657/ZsxqCrawler.git
-cd KnowledgePlanetb
+cd ZsxqCrawler
 
 # 2. 安装uv包管理器（推荐）
 pip install uv
@@ -36,9 +52,7 @@ pip install uv
 uv sync
 ```
 
-## 🚀 快速开始
-
-### 1. 获取认证信息
+### 2. 获取认证信息
 
 在使用工具前，需要获取知识星球的Cookie和群组ID：
 
@@ -54,28 +68,38 @@ uv sync
    - URL格式：`https://wx.zsxq.com/group/{群组ID}`
    - 从URL中提取群组ID
 
-3. **首次使用**：编辑 `config.toml` 文件，填入您的配置信息
+3. **首次使用**：
+   - 编辑 `config.toml` 文件，填入您的配置信息
+   - 或者启动Web界面后按照提示进行配置
 
-### 2. 运行应用
+### 3. 运行应用
+
+#### 方式一：Web界面（推荐）
+
+```bash
+# 1. 启动后端API服务
+uv run main.py
+
+# 2. 启动前端服务（新开终端窗口）
+cd frontend
+npm run dev
+```
+
+然后访问：
+- 🌐 **Web界面**: http://localhost:3000
+- 📖 **API文档**: http://localhost:8000/docs
+
+#### 方式二：命令行工具
 
 ```bash
 # 运行交互式命令行工具
 uv run zsxq_interactive_crawler.py
 ```
 
-#### 📝 主要功能
-
-**话题采集功能**:
-- **全量采集**: 获取所有历史话题数据
-- **增量采集**: 指定页数进行历史数据采集
-- **智能更新**: 只采集最新的话题内容
-- **无限爬取**: 持续采集直到没有新数据
-
-**文件下载功能**:
-- **按下载次数下载**: 下载热门文件
-- **按时间顺序下载**: 按发布时间下载文件
-- **文件信息收集**: 收集文件列表到数据库
-- **统计查看**: 查看数据库中的文件统计信息
+<div align="center">
+  <img src="QQ20250703-170055.png" alt="命令行界面" height="400">
+  <p><em>命令行界面 - 交互式操作控制台</em></p>
+</div>
 
 ## 🤝 贡献指南
 

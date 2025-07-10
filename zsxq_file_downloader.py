@@ -22,46 +22,123 @@ from zsxq_file_database import ZSXQFileDatabase
 class ZSXQFileDownloader:
     """知识星球文件下载器"""
     
-    def __init__(self, cookie: str, group_id: str, download_dir: str = "downloads", db_path: str = "zsxq_files_complete.db"):
+    def __init__(self, cookie: str, group_id: str, db_path: str = None, download_dir: str = "downloads",
+                 download_interval: float = 1.0, long_sleep_interval: float = 60.0,
+                 files_per_batch: int = 10, download_interval_min: float = None,
+                 download_interval_max: float = None, long_sleep_interval_min: float = None,
+                 long_sleep_interval_max: float = None):
         """
         初始化文件下载器
-        
+
         Args:
             cookie: 登录凭证
             group_id: 星球ID
+            db_path: 数据库文件路径（如果为None，使用默认路径）
             download_dir: 下载目录
-            db_path: 数据库文件路径
+            download_interval: 单次下载间隔（秒），默认1秒
+            long_sleep_interval: 长休眠间隔（秒），默认60秒
+            files_per_batch: 下载多少文件后触发长休眠，默认10个文件
+            download_interval_min: 随机下载间隔最小值（秒）
+            download_interval_max: 随机下载间隔最大值（秒）
+            long_sleep_interval_min: 随机长休眠间隔最小值（秒）
+            long_sleep_interval_max: 随机长休眠间隔最大值（秒）
         """
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
-        self.download_dir = download_dir
-        self.db_path = db_path
+
+        # 下载间隔控制参数
+        self.download_interval = download_interval
+        self.long_sleep_interval = long_sleep_interval
+        self.files_per_batch = files_per_batch
+        self.current_batch_count = 0  # 当前批次已下载文件数
+
+        # 随机间隔范围参数（如果提供了范围参数，则使用随机间隔）
+        self.use_random_interval = download_interval_min is not None
+        if self.use_random_interval:
+            self.download_interval_min = download_interval_min
+            self.download_interval_max = download_interval_max
+            self.long_sleep_interval_min = long_sleep_interval_min
+            self.long_sleep_interval_max = long_sleep_interval_max
+        else:
+            # 使用固定间隔时的默认范围值（保持向后兼容）
+            self.download_interval_min = 60  # 下载间隔最小值（1分钟）
+            self.download_interval_max = 180  # 下载间隔最大值（3分钟）
+            self.long_sleep_interval_min = 180  # 长休眠最小值（3分钟）
+            self.long_sleep_interval_max = 300  # 长休眠最大值（5分钟）
+
+        # 如果没有指定数据库路径，使用默认路径
+        if db_path is None:
+            from db_path_manager import get_db_path_manager
+            path_manager = get_db_path_manager()
+            self.db_path = path_manager.get_files_db_path(group_id)
+        else:
+            self.db_path = db_path
+
+        # 为每个群组创建专属的下载目录
+        if download_dir == "downloads":  # 默认目录
+            from db_path_manager import get_db_path_manager
+            path_manager = get_db_path_manager()
+            group_dir = path_manager.get_group_dir(group_id)
+            self.download_dir = os.path.join(group_dir, "downloads")
+        else:
+            # 如果指定了自定义目录，也在其下创建群组子目录
+            self.download_dir = os.path.join(download_dir, f"group_{group_id}")
+
+        print(f"📁 群组 {group_id} 下载目录: {self.download_dir}")
         self.base_url = "https://api.zsxq.com"
-        
+
+        # 日志回调和停止检查函数
+        self.log_callback = None
+        self.stop_check_func = None
+        self.stop_flag = False  # 本地停止标志
+
         # 反检测设置
         self.min_delay = 2.0  # 最小延迟（秒）
         self.max_delay = 5.0  # 最大延迟（秒）
-        self.download_interval_min = 60  # 下载间隔最小值（1分钟）
-        self.download_interval_max = 180  # 下载间隔最大值（3分钟）
         self.long_delay_interval = 5  # 每N个文件进行长休眠
-        self.long_delay_min = 180  # 长休眠最小值（3分钟）
-        self.long_delay_max = 300  # 长休眠最大值（5分钟）
-        
+
         # 统计
         self.request_count = 0
         self.download_count = 0
         self.debug_mode = False
-        
+
         # 创建session
         self.session = requests.Session()
-        
+
         # 确保下载目录存在
-        os.makedirs(download_dir, exist_ok=True)
-        print(f"📁 下载目录: {os.path.abspath(download_dir)}")
-        
+        os.makedirs(self.download_dir, exist_ok=True)
+        self.log(f"📁 下载目录: {os.path.abspath(self.download_dir)}")
+
         # 使用完整的文件数据库
-        self.file_db = ZSXQFileDatabase(db_path)
-        print(f"📊 完整文件数据库初始化完成: {db_path}")
+        self.file_db = ZSXQFileDatabase(self.db_path)
+        self.log(f"📊 完整文件数据库初始化完成: {self.db_path}")
+
+    def log(self, message: str):
+        """统一的日志输出方法"""
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message)
+
+    def set_stop_flag(self):
+        """设置停止标志"""
+        self.stop_flag = True
+        self.log("🛑 收到停止信号，任务将在下一个检查点停止")
+
+    def is_stopped(self):
+        """检查是否被停止（综合检查本地标志和外部函数）"""
+        # 首先检查本地停止标志
+        if self.stop_flag:
+            return True
+        # 然后检查外部停止检查函数
+        if self.stop_check_func and self.stop_check_func():
+            self.stop_flag = True  # 同步本地标志
+            return True
+        return False
+
+    def check_stop(self):
+        """检查是否需要停止（兼容旧方法名）"""
+        return self.is_stopped()
     
     def clean_cookie(self, cookie: str) -> str:
         """清理Cookie字符串，去除不合法字符
@@ -202,34 +279,48 @@ class ZSXQFileDownloader:
         time.sleep(delay)
     
     def download_delay(self):
-        """下载间隔延迟（1-3分钟）"""
-        delay = random.uniform(self.download_interval_min, self.download_interval_max)
+        """下载间隔延迟"""
+        if self.use_random_interval:
+            # 使用API传入的随机间隔范围
+            delay = random.uniform(self.download_interval_min, self.download_interval_max)
+            print(f"⏳ 下载间隔: {delay:.0f}秒 ({delay/60:.1f}分钟) [随机范围: {self.download_interval_min}-{self.download_interval_max}秒]")
+        else:
+            # 使用固定间隔
+            delay = self.download_interval
+            print(f"⏳ 下载间隔: {delay:.1f}秒 [固定间隔]")
+
         start_time = datetime.datetime.now()
         end_time = start_time + datetime.timedelta(seconds=delay)
-        
-        print(f"⏳ 下载间隔: {delay:.0f}秒 ({delay/60:.1f}分钟)")
+
         print(f"   ⏰ 开始时间: {start_time.strftime('%H:%M:%S')}")
         print(f"   🕐 预计恢复: {end_time.strftime('%H:%M:%S')}")
-        
+
         time.sleep(delay)
-        
+
         actual_end_time = datetime.datetime.now()
         print(f"   🕐 实际结束: {actual_end_time.strftime('%H:%M:%S')}")
     
     def check_long_delay(self):
         """检查是否需要长休眠"""
         if self.download_count > 0 and self.download_count % self.long_delay_interval == 0:
-            delay = random.uniform(self.long_delay_min, self.long_delay_max)
+            if self.use_random_interval:
+                # 使用API传入的随机长休眠间隔范围
+                delay = random.uniform(self.long_sleep_interval_min, self.long_sleep_interval_max)
+                print(f"🛌 长休眠开始: {delay:.0f}秒 ({delay/60:.1f}分钟) [随机范围: {self.long_sleep_interval_min/60:.1f}-{self.long_sleep_interval_max/60:.1f}分钟]")
+            else:
+                # 使用固定长休眠间隔
+                delay = self.long_sleep_interval
+                print(f"🛌 长休眠开始: {delay:.0f}秒 ({delay/60:.1f}分钟) [固定间隔]")
+
             start_time = datetime.datetime.now()
             end_time = start_time + datetime.timedelta(seconds=delay)
-            
-            print(f"🛌 长休眠开始: {delay:.0f}秒 ({delay/60:.1f}分钟)")
+
             print(f"   已下载 {self.download_count} 个文件，进入长休眠模式...")
             print(f"   ⏰ 开始时间: {start_time.strftime('%H:%M:%S')}")
             print(f"   🕐 预计恢复: {end_time.strftime('%H:%M:%S')}")
-            
+
             time.sleep(delay)
-            
+
             actual_end_time = datetime.datetime.now()
             print(f"😴 长休眠结束，继续下载...")
             print(f"   🕐 实际结束: {actual_end_time.strftime('%H:%M:%S')}")
@@ -247,11 +338,11 @@ class ZSXQFileDownloader:
         if index:
             params["index"] = index
         
-        print(f"🌐 获取文件列表")
-        print(f"   📊 参数: count={count}, sort={sort}")
+        self.log(f"🌐 获取文件列表")
+        self.log(f"   📊 参数: count={count}, sort={sort}")
         if index:
-            print(f"   📑 索引: {index}")
-        print(f"   🌐 请求URL: {url}")
+            self.log(f"   📑 索引: {index}")
+        self.log(f"   🌐 请求URL: {url}")
         
         for attempt in range(max_retries):
             if attempt > 0:
@@ -341,8 +432,8 @@ class ZSXQFileDownloader:
         url = f"{self.base_url}/v2/files/{file_id}/download_url"
         max_retries = 10
         
-        print(f"   🔗 获取下载链接: ID={file_id}")
-        print(f"   🌐 请求URL: {url}")
+        self.log(f"   🔗 获取下载链接: ID={file_id}")
+        self.log(f"   🌐 请求URL: {url}")
         
         for attempt in range(max_retries):
             if attempt > 0:
@@ -385,15 +476,22 @@ class ZSXQFileDownloader:
                         else:
                             error_msg = data.get('message', data.get('error', '未知错误'))
                             error_code = data.get('code', 'N/A')
-                            print(f"   ❌ API返回失败: {error_msg} (代码: {error_code})")
-                            
+                            self.log(f"   ❌ API返回失败: {error_msg} (代码: {error_code})")
+
+                            # 检查是否是1030权限错误
+                            if error_code == 1030:
+                                self.log(f"   🚫 权限不足错误(1030)：此文件只能在手机端下载，任务将自动停止")
+                                # 设置停止标志，让整个任务停止
+                                self.set_stop_flag()
+                                return None
+
                             # 检查是否是可重试的错误
                             if error_code in [1059, 500, 502, 503, 504]:  # 内部错误、服务器错误等
                                 if attempt < max_retries - 1:
-                                    print(f"   🔄 检测到可重试错误，准备重试...")
+                                    self.log(f"   🔄 检测到可重试错误，准备重试...")
                                     continue
                             else:
-                                print(f"   🚫 非可重试错误，停止重试")
+                                self.log(f"   🚫 非可重试错误，停止重试")
                                 return None
                                 
                     except json.JSONDecodeError as e:
@@ -432,10 +530,15 @@ class ZSXQFileDownloader:
         file_size = file_data.get('size', 0)
         download_count = file_data.get('download_count', 0)
         
-        print(f"📥 准备下载文件:")
-        print(f"   📄 名称: {file_name}")
-        print(f"   📊 大小: {file_size:,} bytes ({file_size/1024/1024:.2f} MB)")
-        print(f"   📈 下载次数: {download_count}")
+        self.log(f"📥 准备下载文件:")
+        self.log(f"   📄 名称: {file_name}")
+        self.log(f"   📊 大小: {file_size:,} bytes ({file_size/1024/1024:.2f} MB)")
+        self.log(f"   📈 下载次数: {download_count}")
+
+        # 检查是否需要停止
+        if self.check_stop():
+            self.log("🛑 下载任务被停止")
+            return False
         
         # 清理文件名（移除非法字符）
         safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}')
@@ -448,21 +551,38 @@ class ZSXQFileDownloader:
         if os.path.exists(file_path):
             existing_size = os.path.getsize(file_path)
             if existing_size == file_size:
-                print(f"   ✅ 文件已存在且大小匹配，跳过下载")
+                self.log(f"   ✅ 文件已存在且大小匹配，跳过下载")
                 return "skipped"  # 返回特殊值表示跳过
             else:
-                print(f"   ⚠️ 文件已存在但大小不匹配，重新下载")
+                self.log(f"   ⚠️ 文件已存在但大小不匹配，重新下载")
         
         # 只有在需要下载时才获取下载链接
         download_url = self.get_download_url(file_id)
         if not download_url:
-            print(f"   ❌ 无法获取下载链接")
+            self.log(f"   ❌ 无法获取下载链接")
             return False
-        
+
         try:
             # 下载文件
-            print(f"   🚀 开始下载...")
+            self.log(f"   🚀 开始下载...")
             response = self.session.get(download_url, timeout=300, stream=True)
+
+            # 如果文件名是默认的，尝试从响应头获取真实文件名
+            if file_name.startswith('file_') and 'content-disposition' in response.headers:
+                content_disposition = response.headers['content-disposition']
+                if 'filename=' in content_disposition:
+                    # 提取文件名
+                    import re
+                    filename_match = re.search(r'filename[*]?=([^;]+)', content_disposition)
+                    if filename_match:
+                        real_filename = filename_match.group(1).strip('"\'')
+                        if real_filename:
+                            file_name = real_filename
+                            safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}')
+                            if not safe_filename:
+                                safe_filename = f"file_{file_id}"
+                            file_path = os.path.join(self.download_dir, safe_filename)
+                            self.log(f"   📝 从响应头获取到真实文件名: {file_name}")
             
             if response.status_code == 200:
                 total_size = int(response.headers.get('content-length', 0))
@@ -478,83 +598,126 @@ class ZSXQFileDownloader:
                             if downloaded_size % (10 * 1024 * 1024) == 0 or downloaded_size == total_size:
                                 if total_size > 0:
                                     progress = (downloaded_size / total_size) * 100
-                                    print(f"   📊 进度: {progress:.1f}% ({downloaded_size:,}/{total_size:,} bytes)")
-                                else:
-                                    print(f"   📊 已下载: {downloaded_size:,} bytes")
+                                    self.log(f"   📊 进度: {progress:.1f}% ({downloaded_size:,}/{total_size:,} bytes)")
+
+                            # 检查是否需要停止
+                            if self.check_stop():
+                                self.log("🛑 下载过程中被停止")
+                                return False
+
+                            if downloaded_size % (10 * 1024 * 1024) != 0 and downloaded_size != total_size:
+                                if total_size == 0:
+                                    self.log(f"   📊 已下载: {downloaded_size:,} bytes")
                 
                 # 验证文件大小
                 final_size = os.path.getsize(file_path)
                 if file_size > 0 and final_size != file_size:
-                    print(f"   ⚠️ 文件大小不匹配: 预期{file_size:,}, 实际{final_size:,}")
-                
-                print(f"   ✅ 下载完成: {safe_filename}")
-                print(f"   💾 保存路径: {file_path}")
-                
+                    self.log(f"   ⚠️ 文件大小不匹配: 预期{file_size:,}, 实际{final_size:,}")
+
+                self.log(f"   ✅ 下载完成: {safe_filename}")
+                self.log(f"   💾 保存路径: {file_path}")
+
                 self.download_count += 1
+                self.current_batch_count += 1
+
+                # 下载间隔控制
+                self._apply_download_intervals()
+
                 return True
             else:
-                print(f"   ❌ 下载失败: HTTP {response.status_code}")
+                self.log(f"   ❌ 下载失败: HTTP {response.status_code}")
                 return False
-                
+
         except Exception as e:
-            print(f"   ❌ 下载异常: {e}")
+            self.log(f"   ❌ 下载异常: {e}")
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"   🗑️ 删除不完整文件")
+                self.log(f"   🗑️ 删除不完整文件")
             return False
-    
+
+    def _apply_download_intervals(self):
+        """应用下载间隔控制"""
+        import time
+
+        # 检查是否需要长休眠
+        if self.current_batch_count >= self.files_per_batch:
+            self.log(f"⏰ 已下载 {self.current_batch_count} 个文件，开始长休眠 {self.long_sleep_interval} 秒...")
+            time.sleep(self.long_sleep_interval)
+            self.current_batch_count = 0  # 重置批次计数
+            self.log(f"😴 长休眠结束，继续下载")
+        else:
+            # 普通下载间隔
+            if self.download_interval > 0:
+                self.log(f"⏱️ 下载间隔休眠 {self.download_interval} 秒...")
+                time.sleep(self.download_interval)
+
     def download_files_batch(self, max_files: Optional[int] = None, start_index: Optional[str] = None) -> Dict[str, int]:
         """批量下载文件"""
         if max_files is None:
-            print(f"\n📥 开始无限下载文件 (直到没有更多文件)")
+            self.log(f"📥 开始无限下载文件 (直到没有更多文件)")
         else:
-            print(f"\n📥 开始批量下载文件 (最多{max_files}个)")
-        
+            self.log(f"📥 开始批量下载文件 (最多{max_files}个)")
+
+        # 检查是否需要停止
+        if self.check_stop():
+            self.log("🛑 任务被停止")
+            return {'total_files': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0}
+
         stats = {'total_files': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0}
         current_index = start_index
         downloaded_in_batch = 0
         
         while max_files is None or downloaded_in_batch < max_files:
+            # 检查是否需要停止
+            if self.check_stop():
+                self.log("🛑 批量下载任务被停止")
+                break
+
             # 获取文件列表
             data = self.fetch_file_list(count=20, index=current_index)
             if not data:
-                print("❌ 获取文件列表失败")
+                self.log("❌ 获取文件列表失败")
                 break
-            
+
             files = data.get('resp_data', {}).get('files', [])
             next_index = data.get('resp_data', {}).get('index')
-            
+
             if not files:
-                print("📭 没有更多文件")
+                self.log("📭 没有更多文件")
                 break
-            
-            print(f"\n📋 当前批次: {len(files)} 个文件")
+
+            self.log(f"📋 当前批次: {len(files)} 个文件")
             
             for i, file_info in enumerate(files):
+                # 检查是否需要停止
+                if self.check_stop():
+                    self.log("🛑 文件下载过程中被停止")
+                    break
+
                 if max_files is not None and downloaded_in_batch >= max_files:
                     break
-                
+
                 file_data = file_info.get('file', {})
                 file_name = file_data.get('name', 'Unknown')
-                
+
                 if max_files is None:
-                    print(f"\n【第{downloaded_in_batch + 1}个文件】{file_name}")
+                    self.log(f"【第{downloaded_in_batch + 1}个文件】{file_name}")
                 else:
-                    print(f"\n【{downloaded_in_batch + 1}/{max_files}】{file_name}")
-                
+                    self.log(f"【{downloaded_in_batch + 1}/{max_files}】{file_name}")
+
                 # 下载文件
                 result = self.download_file(file_info)
-                
+
                 if result == "skipped":
                     stats['skipped'] += 1
-                    print(f"   ⚠️ 文件已跳过，继续下一个")
+                    self.log(f"   ⚠️ 文件已跳过，继续下一个")
                 elif result:
                     stats['downloaded'] += 1
                     downloaded_in_batch += 1
-                    
+
                     # 检查长休眠
                     self.check_long_delay()
-                    
+
                     # 如果不是最后一个文件，进行下载间隔
                     has_more_in_batch = (i + 1) < len(files)
                     not_reached_limit = max_files is None or downloaded_in_batch < max_files
@@ -569,16 +732,16 @@ class ZSXQFileDownloader:
             should_continue = max_files is None or downloaded_in_batch < max_files
             if next_index and should_continue:
                 current_index = next_index
-                print(f"\n📄 准备获取下一页: {next_index}")
+                self.log(f"📄 准备获取下一页: {next_index}")
                 time.sleep(2)  # 页面间短暂延迟
             else:
                 break
-        
-        print(f"\n🎉 批量下载完成:")
-        print(f"   📊 总文件数: {stats['total_files']}")
-        print(f"   ✅ 下载成功: {stats['downloaded']}")
-        print(f"   ⚠️ 跳过: {stats['skipped']}")
-        print(f"   ❌ 失败: {stats['failed']}")
+
+        self.log(f"🎉 批量下载完成:")
+        self.log(f"   📊 总文件数: {stats['total_files']}")
+        self.log(f"   ✅ 下载成功: {stats['downloaded']}")
+        self.log(f"   ⚠️ 跳过: {stats['skipped']}")
+        self.log(f"   ❌ 失败: {stats['failed']}")
         
         return stats
     
@@ -731,15 +894,20 @@ class ZSXQFileDownloader:
     
     def collect_files_by_time(self, sort: str = "by_create_time", start_time: Optional[str] = None) -> Dict[str, int]:
         """按时间顺序收集文件列表到数据库（使用完整的数据库结构）"""
-        print(f"\n📊 开始按时间顺序收集文件列表到完整数据库...")
-        print(f"   📅 排序方式: {sort}")
+        self.log(f"📊 开始按时间顺序收集文件列表到完整数据库...")
+        self.log(f"   📅 排序方式: {sort}")
         if start_time:
-            print(f"   ⏰ 起始时间: {start_time}")
-        
+            self.log(f"   ⏰ 起始时间: {start_time}")
+
+        # 检查是否需要停止
+        if self.check_stop():
+            self.log("🛑 任务被停止")
+            return {'total_files': 0, 'new_files': 0}
+
         # 使用完整数据库的统计信息
         initial_stats = self.file_db.get_database_stats()
         initial_files = initial_stats.get('files', 0)
-        print(f"   📊 数据库初始状态: {initial_files} 个文件")
+        self.log(f"   📊 数据库初始状态: {initial_files} 个文件")
         
         total_imported_stats = {
             'files': 0, 'topics': 0, 'users': 0, 'groups': 0,
@@ -750,67 +918,71 @@ class ZSXQFileDownloader:
         
         try:
             while True:
+                # 检查是否需要停止
+                if self.check_stop():
+                    self.log("🛑 文件收集任务被停止")
+                    break
+
                 page_count += 1
-                print(f"\n📄 收集第{page_count}页文件列表...")
-                
+                self.log(f"📄 收集第{page_count}页文件列表...")
+
                 # 获取文件列表（按时间排序）
                 data = self.fetch_file_list(count=20, index=current_index, sort=sort)
                 if not data:
-                    print(f"❌ 第{page_count}页获取失败，收集过程中断")
-                    print(f"💾 已成功收集前{page_count-1}页的数据")
+                    self.log(f"❌ 第{page_count}页获取失败，收集过程中断")
+                    self.log(f"💾 已成功收集前{page_count-1}页的数据")
                     break
                 
                 files = data.get('resp_data', {}).get('files', [])
                 next_index = data.get('resp_data', {}).get('index')
                 
                 if not files:
-                    print("📭 没有更多文件")
+                    self.log("📭 没有更多文件")
                     break
-                
-                print(f"   📋 当前页面: {len(files)} 个文件")
-                
+
+                self.log(f"   📋 当前页面: {len(files)} 个文件")
+
                 # 使用完整数据库导入整个API响应
                 try:
                     page_stats = self.file_db.import_file_response(data)
-                    
+
                     # 累计统计
                     for key in total_imported_stats:
                         total_imported_stats[key] += page_stats.get(key, 0)
-                    
-                    print(f"   ✅ 第{page_count}页存储完成: 文件+{page_stats.get('files', 0)}, 话题+{page_stats.get('topics', 0)}")
-                    print(f"      用户+{page_stats.get('users', 0)}, 群组+{page_stats.get('groups', 0)}, 图片+{page_stats.get('images', 0)}")
-                    
+
+                    self.log(f"   ✅ 第{page_count}页存储完成: 文件+{page_stats.get('files', 0)}, 话题+{page_stats.get('topics', 0)}")
+
                 except Exception as e:
-                    print(f"   ❌ 第{page_count}页存储失败: {e}")
+                    self.log(f"   ❌ 第{page_count}页存储失败: {e}")
                     continue
                 
                 # 准备下一页
                 if next_index:
                     current_index = next_index
-                    print(f"   ⏭️ 下一页时间戳: {current_index}")
+                    self.log(f"   ⏭️ 下一页时间戳: {current_index}")
                     # 页面间短暂延迟
                     time.sleep(random.uniform(2, 5))
                 else:
-                    print("📭 已到达最后一页")
+                    self.log("📭 已到达最后一页")
                     break
-                    
+
         except KeyboardInterrupt:
-            print(f"\n⏹️ 用户中断收集")
+            self.log(f"⏹️ 用户中断收集")
         except Exception as e:
-            print(f"\n❌ 收集过程异常: {e}")
-        
+            self.log(f"❌ 收集过程异常: {e}")
+
         # 最终统计
         final_stats = self.file_db.get_database_stats()
         final_files = final_stats.get('files', 0)
         new_files = final_files - initial_files
-        
-        print(f"\n🎉 完整文件列表收集完成:")
-        print(f"   📊 处理页数: {page_count}")
-        print(f"   📁 新增文件: {new_files} (总计: {final_files})")
-        print(f"   📋 累计导入统计:")
+
+        self.log(f"🎉 完整文件列表收集完成:")
+        self.log(f"   📊 处理页数: {page_count}")
+        self.log(f"   📁 新增文件: {new_files} (总计: {final_files})")
+        self.log(f"   📋 累计导入统计:")
         for key, value in total_imported_stats.items():
             if value > 0:
-                print(f"      {key}: +{value}")
+                self.log(f"      {key}: +{value}")
         
         print(f"\n📊 当前数据库状态:")
         for table, count in final_stats.items():
@@ -826,30 +998,35 @@ class ZSXQFileDownloader:
     
     def collect_incremental_files(self) -> Dict[str, int]:
         """增量收集：从数据库最老时间戳开始继续收集"""
-        print(f"\n🔄 开始增量文件收集...")
-        
+        self.log(f"🔄 开始增量文件收集...")
+
+        # 检查是否需要停止
+        if self.check_stop():
+            self.log("🛑 任务被停止")
+            return {'total_files': 0, 'new_files': 0}
+
         # 获取数据库时间范围
         time_info = self.get_database_time_range()
-        
+
         if not time_info['has_data']:
-            print("📊 数据库为空，将进行全量收集")
+            self.log("📊 数据库为空，将进行全量收集")
             return self.collect_files_by_time()
         
         oldest_time = time_info['oldest_time']
         newest_time = time_info['newest_time']
         total_files = time_info['total_files']
         
-        print(f"📊 数据库现状:")
-        print(f"   现有文件数: {total_files}")
-        print(f"   最老时间: {oldest_time}")
-        print(f"   最新时间: {newest_time}")
-        
+        self.log(f"📊 数据库现状:")
+        self.log(f"   现有文件数: {total_files}")
+        self.log(f"   最老时间: {oldest_time}")
+        self.log(f"   最新时间: {newest_time}")
+
         if not oldest_time:
-            print("⚠️ 数据库中没有有效的时间信息，进行全量收集")
+            self.log("⚠️ 数据库中没有有效的时间信息，进行全量收集")
             return self.collect_files_by_time()
-        
+
         # 从最老时间戳开始收集更早的文件
-        print(f"🎯 将从最老时间戳开始收集更早的文件...")
+        self.log(f"🎯 将从最老时间戳开始收集更早的文件...")
         
         # 将时间戳转换为毫秒数用作index
         try:
@@ -863,21 +1040,26 @@ class ZSXQFileDownloader:
                 timestamp_ms = int(oldest_time)
             
             start_index = str(timestamp_ms)
-            print(f"🚀 增量收集起始时间戳: {start_index}")
-            
+            self.log(f"🚀 增量收集起始时间戳: {start_index}")
+
             return self.collect_files_by_time(start_time=start_index)
-            
+
         except Exception as e:
-            print(f"⚠️ 时间戳处理失败: {e}")
-            print("🔄 改为全量收集")
+            self.log(f"⚠️ 时间戳处理失败: {e}")
+            self.log("🔄 改为全量收集")
             return self.collect_files_by_time()
     
     def download_files_from_database(self, max_files: Optional[int] = None, status_filter: str = 'pending') -> Dict[str, int]:
         """从完整数据库下载文件（使用file_id字段）"""
-        print(f"\n📥 开始从完整数据库下载文件...")
+        self.log(f"📥 开始从完整数据库下载文件...")
         if max_files:
-            print(f"   🎯 下载限制: {max_files}个文件")
-        print(f"   🔍 状态筛选: {status_filter} (注意: 新数据库暂无下载状态，默认为pending)")
+            self.log(f"   🎯 下载限制: {max_files}个文件")
+        self.log(f"   🔍 状态筛选: {status_filter}")
+
+        # 检查是否需要停止
+        if self.check_stop():
+            self.log("🛑 任务被停止")
+            return {'total_files': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0}
         
         # 从完整数据库获取文件列表
         if max_files:
@@ -897,17 +1079,22 @@ class ZSXQFileDownloader:
         files_to_download = self.file_db.cursor.fetchall()
         
         if not files_to_download:
-            print(f"📭 数据库中没有文件可下载")
+            self.log(f"📭 数据库中没有文件可下载")
             return {'total_files': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0}
-        
-        print(f"📋 找到 {len(files_to_download)} 个待下载文件")
-        
+
+        self.log(f"📋 找到 {len(files_to_download)} 个待下载文件")
+
         stats = {'total_files': len(files_to_download), 'downloaded': 0, 'skipped': 0, 'failed': 0}
-        
+
         for i, (file_id, file_name, file_size, download_count, create_time) in enumerate(files_to_download, 1):
+            # 检查是否需要停止
+            if self.check_stop():
+                self.log("🛑 下载任务被停止")
+                break
+
             try:
-                print(f"\n【{i}/{len(files_to_download)}】{file_name}")
-                print(f"   📊 文件ID: {file_id}, 大小: {file_size/1024:.1f}KB, 下载次数: {download_count}")
+                self.log(f"【{i}/{len(files_to_download)}】{file_name}")
+                self.log(f"   📊 文件ID: {file_id}, 大小: {file_size/1024:.1f}KB, 下载次数: {download_count}")
                 
                 # 构造文件信息结构（使用正确的file_id）
                 file_info = {
@@ -924,33 +1111,33 @@ class ZSXQFileDownloader:
                 
                 if result == "skipped":
                     stats['skipped'] += 1
-                    print(f"   ⚠️ 文件已跳过")
+                    self.log(f"   ⚠️ 文件已跳过")
                 elif result:
                     stats['downloaded'] += 1
-                    
+
                     # 检查长休眠
                     self.check_long_delay()
-                    
+
                     # 如果不是最后一个文件，进行下载间隔
                     if i < len(files_to_download):
                         self.download_delay()
                 else:
                     stats['failed'] += 1
-                    print(f"   ❌ 下载失败")
+                    self.log(f"   ❌ 下载失败")
                 
             except KeyboardInterrupt:
-                print(f"\n⏹️ 用户中断下载")
+                self.log(f"⏹️ 用户中断下载")
                 break
             except Exception as e:
-                print(f"   ❌ 处理文件异常: {e}")
+                self.log(f"   ❌ 处理文件异常: {e}")
                 stats['failed'] += 1
                 continue
-        
-        print(f"\n🎉 数据库下载完成:")
-        print(f"   📊 总文件数: {stats['total_files']}")
-        print(f"   ✅ 下载成功: {stats['downloaded']}")
-        print(f"   ⚠️ 跳过: {stats['skipped']}")
-        print(f"   ❌ 失败: {stats['failed']}")
+
+        self.log(f"🎉 数据库下载完成:")
+        self.log(f"   📊 总文件数: {stats['total_files']}")
+        self.log(f"   ✅ 下载成功: {stats['downloaded']}")
+        self.log(f"   ⚠️ 跳过: {stats['skipped']}")
+        self.log(f"   ❌ 失败: {stats['failed']}")
         
         return stats
     
