@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="_Image.png" alt="知识星球数据采集器" width="200">
+  <img src="images/_Image.png" alt="知识星球数据采集器" width="200">
   <h1>🌟 知识星球数据采集器</h1>
   <p>知识星球内容爬取与文件下载工具，支持话题采集、文件批量下载等功能</p>
   
@@ -7,7 +7,7 @@
   [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
   
-  <img src="info.png" alt="群组详情页面" height="400">
+  <img src="images/info.png" alt="群组详情页面" height="400">
 </div>
 
 ## ✨ 项目特性
@@ -22,17 +22,17 @@
 ### Web界面
 
 <div align="center">
-  <img src="home.png" alt="首页界面" height="400">
+  <img src="images/home.png" alt="首页界面" height="400">
   <p><em>首页 - 群组选择和概览</em></p>
 </div>
 
 <div align="center">
-  <img src="config.png" alt="配置页面" height="400">
+  <img src="images/config.png" alt="配置页面" height="400">
   <p><em>配置页面 - 爬取间隔设置</em></p>
 </div>
 
 <div align="center">
-  <img src="log.png" alt="日志页面" height="400">
+  <img src="images/log.png" alt="日志页面" height="400">
   <p><em>日志页面 - 实时任务执行日志</em></p>
 </div>
 
@@ -97,7 +97,7 @@ uv run zsxq_interactive_crawler.py
 ```
 
 <div align="center">
-  <img src="QQ20250703-170055.png" alt="命令行界面" height="400">
+  <img src="images/QQ20250703-170055.png" alt="命令行界面" height="400">
   <p><em>命令行界面 - 交互式操作控制台</em></p>
 </div>
 
