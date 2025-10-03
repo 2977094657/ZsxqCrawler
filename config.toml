@@ -1,24 +1,16 @@
 # 知识星球数据采集器配置文件
-# 请在此文件中配置您的认证信息
+# 通过Web界面自动生成
 
 [auth]
 # 知识星球登录Cookie
-# 获取方法：
-# 1. 打开浏览器，登录知识星球网页版 (https://wx.zsxq.com/)
-# 2. 按F12打开开发者工具
-# 3. 在Network标签页中找到任意API请求
-# 4. 复制请求头中的Cookie值
-cookie = "your_cookie_here"
+cookie = "zsxq_access_token=E14A10BA-40DE-4A8A-AB54-24FCA97BC979_68FE819668EA8E77; abtest_env=product; sajssdk_2015_cross_new_user=1; sensorsdata2015jssdkcross=%7B%22distinct_id%22%3A%22814885525414212%22%2C%22first_id%22%3A%22199a81688729ab-0f158fc47137458-26061951-1327104-199a81688731e66%22%2C%22props%22%3A%7B%22%24latest_traffic_source_type%22%3A%22%E5%BC%95%E8%8D%90%E6%B5%81%E9%87%8F%22%2C%22%24latest_search_keyword%22%3A%22%E6%9C%AA%E5%8F%96%E5%88%B0%E5%80%BC%22%2C%22%24latest_referrer%22%3A%22https%3A%2F%2Fgithub.com%2F%22%7D%2C%22identities%22%3A%22eyIkaWRlbnRpdHlfY29va2llX2lkIjoiMTk5YTgxNjg4NzI5YWItMGYxNThmYzQ3MTM3NDU4LTI2MDYxOTUxLTEzMjcxMDQtMTk5YTgxNjg4NzMxZTY2IiwiJGlkZW50aXR5X2xvZ2luX2lkIjoiODE0ODg1NTI1NDE0MjEyIn0%3D%22%2C%22history_login_id%22%3A%7B%22name%22%3A%22%24identity_login_id%22%2C%22value%22%3A%22814885525414212%22%7D%7D"
 
 # 知识星球群组ID
-# 获取方法：
-# 1. 在知识星球网页版中进入目标群组
-# 2. 查看浏览器地址栏，URL中的数字部分即为GROUP_ID
-group_id = "your_group_id_here"
+group_id = "88851415151812"
 
 [database]
-# 数据库文件路径
-path = "zsxq_interactive.db"
+# 数据库文件路径（由路径管理器自动管理）
+path = "D:/abc/PycharmProjects/ZsxqCrawler/output/databases/88851415151812/zsxq_topics_88851415151812.db"
 
 [download]
 # 下载目录
