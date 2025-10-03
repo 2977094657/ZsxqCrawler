@@ -2242,6 +2242,53 @@ async def fetch_more_comments(topic_id: int, group_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取更多评论失败: {str(e)}")
 
+@app.delete("/api/topics/{topic_id}/{group_id}")
+async def delete_single_topic(topic_id: int, group_id: int):
+    """删除单个话题及其所有关联数据"""
+    crawler = None
+    try:
+        # 使用指定群组的爬虫实例，以便复用其数据库连接
+        crawler = get_crawler_for_group(str(group_id))
+
+        # 检查话题是否存在且属于该群组
+        crawler.db.cursor.execute('SELECT COUNT(*) FROM topics WHERE topic_id = ? AND group_id = ?', (topic_id, group_id))
+        exists = crawler.db.cursor.fetchone()[0] > 0
+        if not exists:
+            return {"success": False, "message": "话题不存在"}
+
+        # 依赖顺序删除关联数据
+        tables_to_clean = [
+            'user_liked_emojis',
+            'like_emojis',
+            'likes',
+            'images',
+            'comments',
+            'answers',
+            'questions',
+            'articles',
+            'talks',
+            'topic_files',
+            'topic_tags'
+        ]
+
+        for table in tables_to_clean:
+            crawler.db.cursor.execute(f'DELETE FROM {table} WHERE topic_id = ?', (topic_id,))
+
+        # 最后删除话题本身（限定群组）
+        crawler.db.cursor.execute('DELETE FROM topics WHERE topic_id = ? AND group_id = ?', (topic_id, group_id))
+
+        deleted = crawler.db.cursor.rowcount
+        crawler.db.conn.commit()
+
+        return {"success": True, "deleted_topic_id": topic_id, "deleted": deleted > 0}
+    except Exception as e:
+        try:
+            if crawler and hasattr(crawler, 'db') and crawler.db:
+                crawler.db.conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"删除话题失败: {str(e)}")
+
 # 单个话题采集 API
 @app.post("/api/topics/fetch-single/{group_id}/{topic_id}")
 async def fetch_single_topic(group_id: str, topic_id: int, fetch_comments: bool = True):
@@ -3068,6 +3115,223 @@ def get_account_summary_for_group_auto(group_id: str) -> Optional[Dict[str, Any]
         }
     return None
 
+# =========================
+# 新增：按时间区间爬取
+# =========================
+
+class CrawlTimeRangeRequest(BaseModel):
+    startTime: Optional[str] = Field(default=None, description="开始时间，支持 YYYY-MM-DD 或 ISO8601，缺省则按 lastDays 推导")
+    endTime: Optional[str] = Field(default=None, description="结束时间，默认当前时间（本地东八区）")
+    lastDays: Optional[int] = Field(default=None, ge=1, le=3650, description="最近N天（与 startTime/endTime 互斥优先；当 startTime 缺省时可用）")
+    perPage: Optional[int] = Field(default=20, ge=1, le=100, description="每页数量")
+    # 可选的随机间隔设置（与其他爬取接口保持一致）
+    crawlIntervalMin: Optional[float] = Field(default=None, ge=1.0, le=60.0, description="爬取间隔最小值(秒)")
+    crawlIntervalMax: Optional[float] = Field(default=None, ge=1.0, le=60.0, description="爬取间隔最大值(秒)")
+    longSleepIntervalMin: Optional[float] = Field(default=None, ge=60.0, le=3600.0, description="长休眠间隔最小值(秒)")
+    longSleepIntervalMax: Optional[float] = Field(default=None, ge=60.0, le=3600.0, description="长休眠间隔最大值(秒)")
+    pagesPerBatch: Optional[int] = Field(default=None, ge=5, le=50, description="每批次页面数")
+
+
+def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRangeRequest"):
+    """后台执行“按时间区间爬取”任务：仅导入位于区间 [startTime, endTime] 内的话题"""
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        # 解析用户输入时间
+        def parse_user_time(s: Optional[str]) -> Optional[datetime]:
+            if not s:
+                return None
+            t = s.strip()
+            try:
+                # 仅日期：YYYY-MM-DD -> 当天00:00:00（东八区）
+                if len(t) == 10 and t[4] == '-' and t[7] == '-':
+                    dt = datetime.strptime(t, '%Y-%m-%d')
+                    return dt.replace(tzinfo=timezone(timedelta(hours=8)))
+                # datetime-local (无秒)：YYYY-MM-DDTHH:MM
+                if 'T' in t and len(t) == 16:
+                    t = t + ':00'
+                # 尾部Z -> +00:00
+                if t.endswith('Z'):
+                    t = t.replace('Z', '+00:00')
+                # 兼容 +0800 -> +08:00
+                if len(t) >= 24 and (t[-5] in ['+', '-']) and t[-3] != ':':
+                    t = t[:-2] + ':' + t[-2:]
+                dt = datetime.fromisoformat(t)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone(timedelta(hours=8)))
+                return dt
+            except Exception:
+                return None
+
+        bj_tz = timezone(timedelta(hours=8))
+        now_bj = datetime.now(bj_tz)
+
+        start_dt = parse_user_time(request.startTime)
+        end_dt = parse_user_time(request.endTime) if request.endTime else None
+
+        # 若指定了最近N天，以 end_dt（默认现在）为终点推导 start_dt
+        if request.lastDays and request.lastDays > 0:
+            if end_dt is None:
+                end_dt = now_bj
+            start_dt = end_dt - timedelta(days=request.lastDays)
+
+        # 默认 end_dt = 现在
+        if end_dt is None:
+            end_dt = now_bj
+        # 默认 start_dt = end_dt - 30天
+        if start_dt is None:
+            start_dt = end_dt - timedelta(days=30)
+
+        # 保证时间顺序
+        if start_dt > end_dt:
+            start_dt, end_dt = end_dt, start_dt
+
+        update_task(task_id, "running", "开始按时间区间爬取...")
+        add_task_log(task_id, f"🗓️ 时间范围: {start_dt.isoformat()} ~ {end_dt.isoformat()}")
+
+        # 停止检查
+        def stop_check():
+            return is_task_stopped(task_id)
+
+        # 爬虫实例（绑定该群组）
+        def log_callback(message: str):
+            add_task_log(task_id, message)
+
+        cookie = get_cookie_for_group(group_id)
+        path_manager = get_db_path_manager()
+        db_path = path_manager.get_topics_db_path(group_id)
+
+        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler.stop_check_func = stop_check
+
+        # 可选：应用自定义间隔设置
+        if any([
+            request.crawlIntervalMin, request.crawlIntervalMax,
+            request.longSleepIntervalMin, request.longSleepIntervalMax,
+            request.pagesPerBatch
+        ]):
+            crawler.set_custom_intervals(
+                crawl_interval_min=request.crawlIntervalMin,
+                crawl_interval_max=request.crawlIntervalMax,
+                long_sleep_interval_min=request.longSleepIntervalMin,
+                long_sleep_interval_max=request.longSleepIntervalMax,
+                pages_per_batch=request.pagesPerBatch
+            )
+
+        per_page = request.perPage or 20
+        total_stats = {'new_topics': 0, 'updated_topics': 0, 'errors': 0, 'pages': 0}
+        end_time_param = None  # 从最新开始
+        max_retries_per_page = 10
+
+        while True:
+            if is_task_stopped(task_id):
+                add_task_log(task_id, "🛑 任务已停止")
+                break
+
+            retry = 0
+            page_processed = False
+            last_time_dt_in_page = None
+
+            while retry < max_retries_per_page:
+                if is_task_stopped(task_id):
+                    break
+
+                data = crawler.fetch_topics_safe(
+                    scope="all",
+                    count=per_page,
+                    end_time=end_time_param,
+                    is_historical=True if end_time_param else False
+                )
+
+                # 会员过期
+                if data and isinstance(data, dict) and data.get('expired'):
+                    add_task_log(task_id, f"❌ 会员已过期: {data.get('message')}")
+                    update_task(task_id, "failed", "会员已过期", data)
+                    return
+
+                if not data:
+                    retry += 1
+                    total_stats['errors'] += 1
+                    add_task_log(task_id, f"❌ 页面获取失败 (重试{retry}/{max_retries_per_page})")
+                    continue
+
+                topics = (data.get('resp_data', {}) or {}).get('topics', []) or []
+                if not topics:
+                    add_task_log(task_id, "📭 无更多数据，任务结束")
+                    page_processed = True
+                    break
+
+                # 过滤时间范围
+                from datetime import datetime
+                filtered = []
+                for t in topics:
+                    ts = t.get('create_time')
+                    dt = None
+                    try:
+                        if ts:
+                            ts_fixed = ts.replace('+0800', '+08:00') if ts.endswith('+0800') else ts
+                            dt = datetime.fromisoformat(ts_fixed)
+                    except Exception:
+                        dt = None
+
+                    if dt:
+                        last_time_dt_in_page = dt  # 该页数据按时间降序；循环结束后持有最后（最老）时间
+                        if start_dt <= dt <= end_dt:
+                            filtered.append(t)
+
+                # 仅导入时间范围内的数据
+                if filtered:
+                    filtered_data = {'succeeded': True, 'resp_data': {'topics': filtered}}
+                    page_stats = crawler.store_batch_data(filtered_data)
+                    total_stats['new_topics'] += page_stats.get('new_topics', 0)
+                    total_stats['updated_topics'] += page_stats.get('updated_topics', 0)
+                    total_stats['errors'] += page_stats.get('errors', 0)
+
+                total_stats['pages'] += 1
+                page_processed = True
+
+                # 计算下一页的 end_time（使用该页最老话题时间 - 偏移毫秒）
+                oldest_in_page = topics[-1].get('create_time')
+                try:
+                    dt_oldest = datetime.fromisoformat(oldest_in_page.replace('+0800', '+08:00'))
+                    dt_oldest = dt_oldest - timedelta(milliseconds=crawler.timestamp_offset_ms)
+                    end_time_param = dt_oldest.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+                except Exception:
+                    end_time_param = oldest_in_page
+
+                # 若该页最老时间已早于 start_dt，则后续更老数据均不在范围内，结束
+                if last_time_dt_in_page and last_time_dt_in_page < start_dt:
+                    add_task_log(task_id, "✅ 已到达起始时间之前，任务结束")
+                    break
+
+                # 成功处理后进行长休眠检查
+                crawler.check_page_long_delay()
+                break  # 成功后跳出重试循环
+
+            if not page_processed:
+                add_task_log(task_id, "🚫 当前页面达到最大重试次数，终止任务")
+                break
+
+            # 结束条件：没有下一页时间或已越过起始边界
+            if not end_time_param or (last_time_dt_in_page and last_time_dt_in_page < start_dt):
+                break
+
+        update_task(task_id, "completed", "时间区间爬取完成", total_stats)
+    except Exception as e:
+        if not is_task_stopped(task_id):
+            add_task_log(task_id, f"❌ 时间区间爬取失败: {str(e)}")
+            update_task(task_id, "failed", f"时间区间爬取失败: {str(e)}")
+
+
+@app.post("/api/crawl/range/{group_id}")
+async def crawl_by_time_range(group_id: str, request: CrawlTimeRangeRequest, background_tasks: BackgroundTasks):
+    """按时间区间爬取话题（支持最近N天或自定义开始/结束时间）"""
+    try:
+        task_id = create_task("crawl_time_range", f"按时间区间爬取 (群组: {group_id})")
+        background_tasks.add_task(run_crawl_time_range_task, task_id, group_id, request)
+        return {"task_id": task_id, "message": "任务已创建，正在后台执行"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建时间区间爬取任务失败: {str(e)}")
 if __name__ == "__main__":
     import sys
     port = 8001 if len(sys.argv) > 1 and sys.argv[1] == "--port" and len(sys.argv) > 2 else 8000

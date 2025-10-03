@@ -46,7 +46,7 @@ export default function GroupDetailPage() {
   const [activeTab, setActiveTab] = useState('topics');
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
-  const [selectedCrawlOption, setSelectedCrawlOption] = useState<'latest' | 'incremental' | 'all' | null>('all');
+  const [selectedCrawlOption, setSelectedCrawlOption] = useState<'latest' | 'incremental' | 'all' | 'range' | null>('all');
   const [selectedDownloadOption, setSelectedDownloadOption] = useState<'time' | 'count' | null>('time');
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set());
   const [expandedContent, setExpandedContent] = useState<Set<number>>(new Set());
@@ -57,6 +57,7 @@ export default function GroupDetailPage() {
   const [tagsLoading, setTagsLoading] = useState(false);
   const [fetchingComments, setFetchingComments] = useState<Set<number>>(new Set());
   const [refreshingTopics, setRefreshingTopics] = useState<Set<number>>(new Set());
+  const [deletingTopics, setDeletingTopics] = useState<Set<number>>(new Set());
   const [cacheInfo, setCacheInfo] = useState<any>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [fileStatuses, setFileStatuses] = useState<Map<number, FileStatus>>(new Map());
@@ -136,6 +137,11 @@ export default function GroupDetailPage() {
   const [crawlIntervalMax, setCrawlIntervalMax] = useState<number>(5);
   const [crawlLongSleepIntervalMin, setCrawlLongSleepIntervalMin] = useState<number>(180);
   const [crawlLongSleepIntervalMax, setCrawlLongSleepIntervalMax] = useState<number>(300);
+// 时间区间采集（最近N天 或 自定义日期）
+const [quickLastDays, setQuickLastDays] = useState<number>(30);
+const [rangeStartDate, setRangeStartDate] = useState<string>('');
+const [rangeEndDate, setRangeEndDate] = useState<string>('');
+const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
 
   // 单个话题采集状态
   const [singleTopicId, setSingleTopicId] = useState<string>('');
@@ -391,6 +397,7 @@ export default function GroupDetailPage() {
   // 爬取操作函数
   const handleCrawlLatest = async () => {
     try {
+      setLatestDialogOpen(false);
       setCrawlLoading('latest');
 
       // 构建爬取设置参数
@@ -483,6 +490,46 @@ export default function GroupDetailPage() {
       }, 2000);
     } catch (error) {
       toast.error(`增量爬取失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setCrawlLoading(null);
+    }
+  };
+  const handleCrawlRange = async () => {
+    try {
+      setLatestDialogOpen(false);
+      setCrawlLoading('range');
+
+      const params: any = {};
+
+      // 优先使用自定义日期范围；否则使用最近N天
+      if (rangeStartDate || rangeEndDate) {
+        if (rangeStartDate) params.startTime = rangeStartDate; // YYYY-MM-DD
+        if (rangeEndDate) params.endTime = rangeEndDate;       // YYYY-MM-DD
+      } else {
+        params.lastDays = Math.max(1, quickLastDays || 1);
+      }
+
+      // 传递当前的爬取间隔设置
+      params.crawlIntervalMin = crawlIntervalMin;
+      params.crawlIntervalMax = crawlIntervalMax;
+      params.longSleepIntervalMin = crawlLongSleepIntervalMin;
+      params.longSleepIntervalMax = crawlLongSleepIntervalMax;
+      params.pagesPerBatch = Math.max(crawlPagesPerBatch, 5);
+
+      const response = await apiClient.crawlByTimeRange(groupId, params);
+      toast.success(`任务已创建: ${(response as any).task_id}`);
+
+      // 日志联动
+      setCurrentTaskId((response as any).task_id);
+      setActiveTab('logs');
+
+      setTimeout(() => {
+        loadGroupStats();
+        loadTopics();
+        loadRecentTasks();
+      }, 2000);
+    } catch (error) {
+      toast.error(`创建任务失败: ${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
       setCrawlLoading(null);
     }
@@ -703,6 +750,40 @@ export default function GroupDetailPage() {
     }
   };
 
+  // 删除单个话题（改用自定义弹窗，保留方法以兼容可能的调用）
+  const handleDeleteSingleTopic = async (topicId: number) => {
+    await deleteSingleTopicConfirmed(topicId);
+  };
+
+  // 删除单个话题（自定义弹窗调用，无浏览器确认）
+  const deleteSingleTopicConfirmed = async (topicId: number) => {
+    setDeletingTopics(prev => new Set(prev).add(topicId));
+    try {
+      const res = await apiClient.deleteSingleTopic(groupId, topicId) as any;
+      if (res && res.success) {
+        // 从当前列表移除
+        setTopics(prev =>
+          prev.filter(t => parseInt(t.topic_id.toString()) !== parseInt(topicId.toString()))
+        );
+        toast.success('话题已删除');
+        // 刷新统计与标签
+        loadGroupStats();
+        loadTags();
+      } else {
+        toast.error(res?.message || '删除失败');
+      }
+    } catch (err) {
+      toast.error('删除失败');
+      console.error('删除话题失败:', err);
+    } finally {
+      setDeletingTopics(prev => {
+        const s = new Set(prev);
+        s.delete(topicId);
+        return s;
+      });
+    }
+  };
+
   // 加载缓存信息
   const loadCacheInfo = async () => {
     try {
@@ -713,12 +794,8 @@ export default function GroupDetailPage() {
     }
   };
 
-  // 清空图片缓存
+  // 清空图片缓存（使用自定义弹窗，不再重复浏览器确认）
   const clearImageCache = async () => {
-    if (!confirm('确定要清空该群组的所有图片缓存吗？这将删除所有本地缓存的图片文件。')) {
-      return;
-    }
-
     setClearingCache(true);
     try {
       const response = await apiClient.clearImageCache(groupId.toString());
@@ -1015,7 +1092,9 @@ export default function GroupDetailPage() {
                       <img
                         src={apiClient.getProxyImageUrl(topicDetail.answer.owner.avatar_url, groupId.toString())}
                         alt={topicDetail.answer.owner.name}
-                        className="w-8 h-8 rounded-full"
+                        loading="lazy"
+                        decoding="async"
+                        className="w-8 h-8 rounded-full object-cover block"
                         onError={(e) => {
                           e.currentTarget.src = '/default-avatar.png';
                         }}
@@ -1045,7 +1124,9 @@ export default function GroupDetailPage() {
                       <img
                         src={apiClient.getProxyImageUrl(topic.author.avatar_url, groupId.toString())}
                         alt={topic.author.name}
-                        className="w-8 h-8 rounded-full"
+                        loading="lazy"
+                        decoding="async"
+                        className="w-8 h-8 rounded-full object-cover block"
                         onError={(e) => {
                           e.currentTarget.src = '/default-avatar.png';
                         }}
@@ -1088,7 +1169,7 @@ export default function GroupDetailPage() {
                   )}
 
                   {/* 刷新按钮 */}
-                  <button
+                  <button type="button"
                     onClick={() => refreshSingleTopic(topic.topic_id)}
                     disabled={refreshingTopics.has(topic.topic_id)}
                     className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-400 transition-colors ml-2"
@@ -1097,6 +1178,38 @@ export default function GroupDetailPage() {
                     <RotateCcw className={`w-3 h-3 ${refreshingTopics.has(topic.topic_id) ? 'animate-spin' : ''}`} />
                     {refreshingTopics.has(topic.topic_id) ? '获取中' : '远程刷新'}
                   </button>
+
+                  {/* 删除按钮（自定义弹窗确认） */}
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button
+                        type="button"
+                        disabled={deletingTopics.has(topic.topic_id)}
+                        className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 disabled:text-gray-400 transition-colors ml-2"
+                        title="删除该话题（本地数据库）"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        {deletingTopics.has(topic.topic_id) ? '删除中' : '删除'}
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle className="text-red-600">确认删除该话题</AlertDialogTitle>
+                        <AlertDialogDescription className="text-red-700">
+                          此操作将永久删除该话题及其所有关联数据（评论、用户信息等），且不可恢复。确定要继续吗？
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>取消</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => deleteSingleTopicConfirmed(topic.topic_id)}
+                          className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                        >
+                          确认删除
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
 
                 {/* 获取时间信息 */}
@@ -1159,7 +1272,7 @@ export default function GroupDetailPage() {
                       </div>
                       {(extractPlainText(topic.answer_text || topicDetail?.answer?.text || '').split('\n').length > 4 || extractPlainText(topic.answer_text || topicDetail?.answer?.text || '').length > 300) && (
                         <div className="text-center mt-2">
-                          <button
+                          <button type="button"
                             onClick={() => toggleContent(topic.topic_id)}
                             className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
                           >
@@ -1186,7 +1299,7 @@ export default function GroupDetailPage() {
                       </div>
                       {(extractPlainText(topic.talk_text).split('\n').length > 4 || extractPlainText(topic.talk_text).length > 300) && (
                         <div className="text-center mt-2">
-                          <button
+                          <button type="button"
                             onClick={() => toggleContent(topic.topic_id)}
                             className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
                           >
@@ -1207,7 +1320,7 @@ export default function GroupDetailPage() {
                       </div>
                       {topic.title && (extractPlainText(topic.title).split('\n').length > 4 || extractPlainText(topic.title).length > 300) && (
                         <div className="text-center mt-2">
-                          <button
+                          <button type="button"
                             onClick={() => toggleContent(topic.topic_id)}
                             className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
                           >
@@ -1403,7 +1516,7 @@ export default function GroupDetailPage() {
                     </h4>
                     {/* 获取更多评论按钮 */}
                     {(topicDetail.comments_count || 0) > 8 && (
-                      <button
+                      <button type="button"
                         onClick={() => fetchMoreComments(topic.topic_id)}
                         disabled={fetchingComments.has(topic.topic_id)}
                         className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-400 flex items-center gap-1"
@@ -1429,7 +1542,9 @@ export default function GroupDetailPage() {
                         <img
                           src={apiClient.getProxyImageUrl(comment.owner.avatar_url, groupId.toString())}
                           alt={comment.owner.name}
-                          className="w-4 h-4 rounded-full"
+                          loading="lazy"
+                          decoding="async"
+                          className="w-4 h-4 rounded-full object-cover block"
                           onError={(e) => {
                             e.currentTarget.src = '/default-avatar.png';
                           }}
@@ -1477,7 +1592,7 @@ export default function GroupDetailPage() {
 
                       return shouldShowToggle && (
                         <div className="text-center mt-2">
-                          <button
+                          <button type="button"
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
@@ -1819,7 +1934,7 @@ export default function GroupDetailPage() {
                     <div className="max-h-80 overflow-y-auto">
                       <div className="flex flex-wrap gap-1.5">
                         {tags.map((tag) => (
-                          <button
+                          <button type="button"
                             key={tag.tag_id}
                             onClick={() => {
                               setSelectedTag(selectedTag === tag.tag_id ? null : tag.tag_id);
@@ -2094,16 +2209,11 @@ export default function GroupDetailPage() {
                         className={`border rounded-lg p-3 cursor-pointer transition-all ${
                           selectedCrawlOption === 'latest'
                             ? 'bg-blue-50 border-blue-200'
-                            : (!groupStats || groupStats.topics_count === 0)
-                              ? 'border-gray-200 bg-gray-50 opacity-50 cursor-not-allowed'
-                              : 'border-gray-200 hover:bg-gray-50'
+                            : 'border-gray-200 hover:bg-gray-50'
                         }`}
                         onClick={() => {
-                          if (!groupStats || groupStats.topics_count === 0) {
-                            toast.error('数据库为空，请先执行全量爬取');
-                            return;
-                          }
                           setSelectedCrawlOption('latest');
+                          setLatestDialogOpen(true);
                         }}
                       >
                         <div className="flex items-center justify-between mb-2">
@@ -2118,15 +2228,188 @@ export default function GroupDetailPage() {
                           )}
                         </div>
                         {selectedCrawlOption === 'latest' && (
-                          <Button
-                            size="sm"
-                            className="w-full h-7 text-xs bg-blue-600 hover:bg-blue-700"
-                            onClick={handleCrawlLatest}
-                            disabled={!!crawlLoading}
-                          >
-                            {crawlLoading === 'latest' ? '执行中...' : '开始'}
-                          </Button>
+                          <AlertDialog open={latestDialogOpen} onOpenChange={setLatestDialogOpen}>
+                            <Button
+                              size="sm"
+                              className="w-full h-7 text-xs bg-blue-600 hover:bg-blue-700"
+                              disabled={!!crawlLoading}
+                              onClick={() => setLatestDialogOpen(true)}
+                            >
+                              {crawlLoading === 'latest' ? '执行中...' : '开始'}
+                            </Button>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>获取最新或按时间区间</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  默认从最新开始抓取；也可选择最近N天或自定义时间范围。
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <div className="space-y-3">
+                                <div className="text-xs text-gray-600">快速选择：最近N天</div>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    value={quickLastDays}
+                                    onChange={(e) => setQuickLastDays(parseInt(e.target.value || '1'))}
+                                    className="h-7 text-xs w-24"
+                                  />
+                                  <span className="text-xs text-gray-500">天</span>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={() => setQuickLastDays(3)}
+                                  >
+                                    3天
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={() => setQuickLastDays(7)}
+                                  >
+                                    7天
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={() => setQuickLastDays(30)}
+                                  >
+                                    30天
+                                  </Button>
+                                </div>
+                                <div className="text-[10px] text-gray-400">或 自定义日期范围</div>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="date"
+                                    value={rangeStartDate}
+                                    onChange={(e) => setRangeStartDate(e.target.value)}
+                                    className="h-7 text-xs"
+                                  />
+                                  <span className="text-xs text-gray-500">~</span>
+                                  <Input
+                                    type="date"
+                                    value={rangeEndDate}
+                                    onChange={(e) => setRangeEndDate(e.target.value)}
+                                    className="h-7 text-xs"
+                                  />
+                                </div>
+                              </div>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel onClick={(e) => { e.stopPropagation(); setLatestDialogOpen(false); }}>取消</AlertDialogCancel>
+                                <AlertDialogAction onClick={handleCrawlLatest}
+                                  className="bg-blue-600 hover:bg-blue-700 focus:ring-blue-600"
+                                >
+                                  从最新开始
+                                </AlertDialogAction>
+                                <AlertDialogAction
+                                  onClick={handleCrawlRange}
+                                  className="bg-teal-600 hover:bg-teal-700 focus:ring-teal-600"
+                                >
+                                  按时间区间开始
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         )}
+                      {/* 按时间区间爬取 */}
+                      {false && (
+                      <div
+                        className={`border rounded-lg p-3 cursor-pointer transition-all ${
+                          selectedCrawlOption === 'range'
+                            ? 'bg-teal-50 border-teal-200'
+                            : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                        onClick={() => setSelectedCrawlOption('range')}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Calendar className={`h-3 w-3 ${selectedCrawlOption === 'range' ? 'text-teal-600' : 'text-gray-400'}`} />
+                            <span className={`text-xs font-medium ${selectedCrawlOption === 'range' ? 'text-teal-700' : 'text-gray-600'}`}>
+                              按时间区间
+                            </span>
+                          </div>
+                        </div>
+
+                        {selectedCrawlOption === 'range' && (
+                          <div className="space-y-2">
+                            <div className="text-xs text-gray-600">快速选择</div>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type="number"
+                                min={1}
+                                value={quickLastDays}
+                                onChange={(e) => setQuickLastDays(parseInt(e.target.value || '1'))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 text-xs w-24"
+                                placeholder="天数"
+                              />
+                              <span className="text-xs text-gray-500">天</span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs"
+                                onClick={(e) => { e.stopPropagation(); setQuickLastDays(3); }}
+                              >
+                                3天
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs"
+                                onClick={(e) => { e.stopPropagation(); setQuickLastDays(7); }}
+                              >
+                                7天
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs"
+                                onClick={(e) => { e.stopPropagation(); setQuickLastDays(30); }}
+                              >
+                                30天
+                              </Button>
+                            </div>
+
+                            <div className="text-[10px] text-gray-400">或 自定义日期范围</div>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type="date"
+                                value={rangeStartDate}
+                                onChange={(e) => setRangeStartDate(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 text-xs"
+                              />
+                              <span className="text-xs text-gray-500">~</span>
+                              <Input
+                                type="date"
+                                value={rangeEndDate}
+                                onChange={(e) => setRangeEndDate(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 text-xs"
+                              />
+                            </div>
+
+                            <Button
+                              size="sm"
+                              className="w-full h-7 text-xs bg-teal-600 hover:bg-teal-700"
+                              onClick={(e) => { e.stopPropagation(); handleCrawlRange(); }}
+                              disabled={!!crawlLoading}
+                            >
+                              {crawlLoading === 'range' ? '执行中...' : '开始'}
+                            </Button>
+
+                            <div className="text-[10px] text-gray-400">
+                              未选择日期时，将按最近 {quickLastDays} 天执行
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      )}
+                      
+                      {/* 数据管理 */}
                       </div>
 
                       {/* 增量爬取 */}
@@ -2255,6 +2538,7 @@ export default function GroupDetailPage() {
                           <Button
                             size="sm"
                             className="w-full h-7 text-xs bg-purple-600 hover:bg-purple-700"
+                      
                             onClick={handleDownloadByTime}
                             disabled={!!fileLoading}
                           >

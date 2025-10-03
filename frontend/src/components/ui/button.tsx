@@ -40,18 +40,23 @@ function Button({
   variant,
   size,
   asChild = false,
+  type,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
   }) {
   const Comp = asChild ? Slot : "button"
+  // 默认将按钮类型设为 "button"，避免在表单或特定容器中触发隐式提交
+  const resolvedProps = asChild
+    ? props
+    : ({ type: type ?? "button", ...props } as React.ComponentProps<"button">)
 
   return (
     <Comp
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
-      {...props}
+      {...resolvedProps}
     />
   )
 }

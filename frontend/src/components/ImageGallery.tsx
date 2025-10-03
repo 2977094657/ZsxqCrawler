@@ -57,16 +57,16 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ images, className = '', siz
     );
   };
 
-  // 根据size属性获取对应的样式类
+  // 根据size属性获取对应的样式类（固定缩略图盒子尺寸，避免加载时宽度抖动）
   const getSizeClasses = () => {
     switch (size) {
       case 'small':
-        return 'h-16 max-w-16';
+        return 'w-16 h-16';
       case 'large':
-        return 'h-40 max-w-40';
+        return 'w-40 h-40';
       case 'medium':
       default:
-        return 'h-32 max-w-32';
+        return 'w-32 h-32';
     }
   };
 
@@ -75,11 +75,13 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ images, className = '', siz
       {/* 缩略图网格 */}
       <div className="flex gap-2 overflow-x-auto pb-2 w-full">
         {images.map((image, index) => (
-          <div key={image.image_id} className="relative flex-shrink-0">
+          <div key={image.image_id} className={`relative flex-shrink-0 ${getSizeClasses()}`}>
             <img
               src={getThumbnailUrl(image)}
               alt={`话题图片 ${index + 1}`}
-              className={`${getSizeClasses()} w-auto rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity object-cover`}
+              className={`w-full h-full rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity object-cover`}
+              loading="lazy"
+              decoding="async"
               onClick={() => handleThumbnailClick(index)}
               onError={(e) => {
                 // 图片加载失败时的处理
