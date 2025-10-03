@@ -86,7 +86,7 @@ npm run dev
 ```
 
 然后访问：
-- 🌐 **Web界面**: http://localhost:3000
+- 🌐 **Web界面**: http://localhost:3060
 - 📖 **API文档**: http://localhost:8000/docs
 
 #### 方式二：命令行工具
