@@ -7,11 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, X, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { apiClient, Group, GroupStats, Topic, FileStatus } from '@/lib/api';
+import { apiClient, Group, GroupStats, Topic, FileStatus, Account, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
 import SafeImage from '@/components/SafeImage';
 import TaskLogViewer from '@/components/TaskLogViewer';
@@ -60,6 +61,15 @@ export default function GroupDetailPage() {
   const [clearingCache, setClearingCache] = useState(false);
   const [fileStatuses, setFileStatuses] = useState<Map<number, FileStatus>>(new Map());
   const [downloadingFiles, setDownloadingFiles] = useState<Set<number>>(new Set());
+
+  // 账号相关
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [groupAccount, setGroupAccount] = useState<Account | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [assigningAccount, setAssigningAccount] = useState<boolean>(false);
+  const [accountSelf, setAccountSelf] = useState<AccountSelf | null>(null);
+  const [loadingAccountSelf, setLoadingAccountSelf] = useState<boolean>(false);
+  const [refreshingAccountSelf, setRefreshingAccountSelf] = useState<boolean>(false);
 
 
 
@@ -127,6 +137,10 @@ export default function GroupDetailPage() {
   const [crawlLongSleepIntervalMin, setCrawlLongSleepIntervalMin] = useState<number>(180);
   const [crawlLongSleepIntervalMax, setCrawlLongSleepIntervalMax] = useState<number>(300);
 
+  // 单个话题采集状态
+  const [singleTopicId, setSingleTopicId] = useState<string>('');
+  const [fetchingSingle, setFetchingSingle] = useState<boolean>(false);
+
   useEffect(() => {
     loadGroupDetail();
     loadGroupStats();
@@ -136,6 +150,9 @@ export default function GroupDetailPage() {
     loadLocalFileCount();
     loadTags();
     loadCacheInfo();
+    loadGroupAccount();
+    loadAccounts();
+    loadGroupAccountSelf();
   }, [groupId]);
 
   useEffect(() => {
@@ -301,6 +318,76 @@ export default function GroupDetailPage() {
     }
   };
 
+  // 加载账号列表
+  const loadAccounts = async () => {
+    try {
+      const res = await apiClient.listAccounts();
+      setAccounts(res.accounts || []);
+    } catch (err) {
+      console.error('加载账号列表失败:', err);
+    }
+  };
+
+  // 加载群组绑定账号
+  const loadGroupAccount = async () => {
+    try {
+      const res = await apiClient.getGroupAccount(groupId);
+      const acc = (res as any)?.account || null;
+      setGroupAccount(acc);
+      setSelectedAccountId(acc?.id || '');
+    } catch (err) {
+      console.error('加载群组账号失败:', err);
+    }
+  };
+
+  // 加载群组所属账号的自我信息（持久化）
+  const loadGroupAccountSelf = async () => {
+    try {
+      setLoadingAccountSelf(true);
+      const res = await apiClient.getGroupAccountSelf(groupId);
+      setAccountSelf((res as any)?.self || null);
+    } catch (err) {
+      console.error('加载账号用户信息失败:', err);
+    } finally {
+      setLoadingAccountSelf(false);
+    }
+  };
+
+  // 刷新群组所属账号的自我信息（强制抓取）
+  const refreshGroupAccountSelf = async () => {
+    try {
+      setRefreshingAccountSelf(true);
+      const res = await apiClient.refreshGroupAccountSelf(groupId);
+      setAccountSelf((res as any)?.self || null);
+      toast.success('已刷新账号用户信息');
+    } catch (err) {
+      toast.error('刷新账号信息失败');
+      console.error('刷新账号用户信息失败:', err);
+    } finally {
+      setRefreshingAccountSelf(false);
+    }
+  };
+
+  // 绑定账号到当前群组
+  const handleAssignAccount = async () => {
+    if (!selectedAccountId) {
+      toast.error('请选择要绑定的账号');
+      return;
+    }
+    setAssigningAccount(true);
+    try {
+      await apiClient.assignGroupAccount(groupId, selectedAccountId);
+      toast.success('已绑定账号到该群组');
+      await loadGroupAccount();
+      await loadGroupAccountSelf();
+    } catch (err) {
+      toast.error('绑定失败');
+      console.error('绑定账号失败:', err);
+    } finally {
+      setAssigningAccount(false);
+    }
+  };
+
   // 爬取操作函数
   const handleCrawlLatest = async () => {
     try {
@@ -398,6 +485,29 @@ export default function GroupDetailPage() {
       toast.error(`增量爬取失败: ${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
       setCrawlLoading(null);
+    }
+  };
+
+  // 单个话题采集
+  const handleFetchSingleTopic = async () => {
+    if (!singleTopicId || isNaN(parseInt(singleTopicId))) {
+      toast.error('请输入有效的话题ID');
+      return;
+    }
+    setFetchingSingle(true);
+    try {
+      const tid = parseInt(singleTopicId);
+      const res = await apiClient.fetchSingleTopic(groupId, tid);
+      toast.success(`已采集话题 ${tid}（${(res as any)?.imported || 'ok'}）`);
+      // 采集完成后刷新话题列表/统计
+      setTimeout(() => {
+        loadGroupStats();
+        loadTopics();
+      }, 800);
+    } catch (error) {
+      toast.error(`采集失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setFetchingSingle(false);
     }
   };
 
@@ -1111,6 +1221,22 @@ export default function GroupDetailPage() {
               )}
             </div>
 
+            {/* 文章链接（适配 talk.article） */}
+            {topicDetail?.talk?.article && (
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-2 mt-2">
+                <a
+                  href={(topicDetail.talk.article.article_url || topicDetail.talk.article.inline_article_url) as string}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                  title={topicDetail.talk.article.title || '查看文章'}
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  {topicDetail.talk.article.title || '查看文章'}
+                </a>
+              </div>
+            )}
+
             {/* 话题图片 */}
             {topicDetail?.talk?.images && topicDetail.talk.images.length > 0 && (
               <ImageGallery
@@ -1616,6 +1742,56 @@ export default function GroupDetailPage() {
                   )}
                 </div>
 
+                {/* 所属账号 */}
+                {/* 所属账号（自动匹配） */}
+                <div className="mt-6 border-t border-gray-200 pt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-sm font-medium text-gray-900">所属账号</h3>
+                    <Badge variant="outline" className="text-xs">自动匹配</Badge>
+                  </div>
+                  <div className="text-sm text-gray-700 mb-3">
+                    <div className="flex items-center gap-2">
+                      {accountSelf?.avatar_url ? (
+                        <img
+                          src={apiClient.getProxyImageUrl(accountSelf.avatar_url, groupId.toString())}
+                          alt={accountSelf?.name || ''}
+                          className="w-5 h-5 rounded-full"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      ) : (
+                        <div className="w-5 h-5 rounded-full bg-gray-200" />
+                      )}
+                      <span>{accountSelf?.name || groupAccount?.name || groupAccount?.id || '默认账号'}</span>
+                      {(groupAccount?.is_default || groupAccount?.id === 'default') && (
+                        <Badge variant="secondary" className="text-xs">默认</Badge>
+                      )}
+                    </div>
+                  </div>
+                  {false && accounts.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Select value={selectedAccountId} onValueChange={(v) => setSelectedAccountId(v)}>
+                        <SelectTrigger className="w-[240px]">
+                          <SelectValue placeholder="选择一个账号" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {accounts.map((acc) => (
+                            <SelectItem key={acc.id} value={acc.id}>
+                              {(acc.name || acc.id) + (acc.is_default ? '（默认）' : '')}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        size="sm"
+                        onClick={handleAssignAccount}
+                        disabled={!selectedAccountId || assigningAccount}
+                      >
+                        {assigningAccount ? '绑定中...' : '绑定到此群组'}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 {/* 标签区域 */}
                 <div className="mt-6 border-t border-gray-200 pt-4">
                   <div className="flex items-center justify-between mb-3">
@@ -1830,6 +2006,34 @@ export default function GroupDetailPage() {
                   {/* 话题采集选项 */}
                   <TabsContent value="crawl" className="space-y-3 mt-4">
                     <div className="space-y-2">
+                      {/* 单个话题采集（测试） */}
+                      <div className="border rounded-lg p-3 cursor-pointer transition-all border-blue-200 hover:bg-blue-50">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-3 w-3 text-blue-600" />
+                            <span className="text-xs font-medium text-blue-700">
+                              采集单个话题
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            placeholder="输入话题ID"
+                            value={singleTopicId}
+                            onChange={(e) => setSingleTopicId(e.target.value)}
+                            className="h-7 text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={handleFetchSingleTopic}
+                            disabled={fetchingSingle}
+                          >
+                            {fetchingSingle ? '执行中...' : '采集'}
+                          </Button>
+                        </div>
+                      </div>
+
                       {/* 全量爬取 */}
                       <div
                         className={`border rounded-lg p-3 cursor-pointer transition-all ${

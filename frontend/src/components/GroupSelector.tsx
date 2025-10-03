@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Users, MessageSquare, Crown } from 'lucide-react';
-import { apiClient, Group, GroupStats } from '@/lib/api';
+import { apiClient, Group, GroupStats, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
 import SafeImage from './SafeImage';
 import '../styles/group-selector.css';
@@ -24,6 +24,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [accountSelfMap, setAccountSelfMap] = useState<Record<number, AccountSelf | null>>({});
 
   useEffect(() => {
     loadGroups();
@@ -49,6 +50,27 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
       }
 
       setGroups(data.groups);
+
+      // 并发拉取每个群组的所属账号用户信息（头像/昵称等）
+      try {
+        const selfPromises = data.groups.map(async (group: Group) => {
+          try {
+            const res = await apiClient.getGroupAccountSelf(group.group_id);
+            return { groupId: group.group_id, self: (res as any)?.self || null };
+          } catch {
+            return { groupId: group.group_id, self: null };
+          }
+        });
+        const selfResults = await Promise.all(selfPromises);
+        const selfMap: Record<number, AccountSelf | null> = {};
+        selfResults.forEach(({ groupId, self }) => {
+          selfMap[groupId] = self;
+        });
+        setAccountSelfMap(selfMap);
+      } catch (e) {
+        // 忽略单独失败
+        console.warn('加载群组账号用户信息失败:', e);
+      }
 
       // 加载每个群组的统计信息
       const statsPromises = data.groups.map(async (group: Group) => {
@@ -261,6 +283,25 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                             <span>{stats.topics_count || 0}</span>
                           </div>
                         )}
+                      </div>
+
+                      {/* 所属账号标记（头像 + 名称） */}
+                      <div className="flex items-center gap-2 text-xs text-gray-600">
+                        {accountSelfMap[group.group_id]?.avatar_url ? (
+                          <img
+                            src={apiClient.getProxyImageUrl(accountSelfMap[group.group_id]!.avatar_url!)}
+                            alt={accountSelfMap[group.group_id]?.name || ''}
+                            className="w-5 h-5 rounded-full"
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        ) : (
+                          <div className="w-5 h-5 rounded-full bg-gray-200" />
+                        )}
+                        <span className="truncate">
+                          {accountSelfMap[group.group_id]?.name ||
+                           (group.account?.name || group.account?.id) ||
+                           '默认账号'}
+                        </span>
                       </div>
                     </div>
 
