@@ -79,6 +79,7 @@ export interface PaginatedResponse<T> {
 }
 
 export interface Group {
+  account?: Account;
   group_id: number;
   name: string;
   type: string;
@@ -124,6 +125,25 @@ export interface GroupStats {
   total_likes: number;
   total_comments: number;
   total_readings: number;
+}
+export interface Account {
+  id: string;
+  name?: string;
+  cookie?: string; // 已掩码
+  is_default?: boolean;
+  created_at?: string;
+}
+
+export interface AccountSelf {
+  account_id: string;
+  uid?: string;
+  name?: string;
+  avatar_url?: string;
+  location?: string;
+  user_sid?: string;
+  grade?: string;
+  fetched_at?: string;
+  raw_json?: any;
 }
 
 // API客户端类
@@ -262,6 +282,14 @@ class ApiClient {
     return this.request(`/api/topics/${topicId}/${groupId}/refresh`, {
       method: 'POST',
     });
+  }
+
+  // 单个话题采集（测试特殊话题）
+  async fetchSingleTopic(groupId: number | string, topicId: number, fetchComments: boolean = false) {
+    const params = new URLSearchParams();
+    if (fetchComments) params.append('fetch_comments', 'true');
+    const url = `/api/topics/fetch-single/${groupId}/${topicId}${params.toString() ? '?' + params.toString() : ''}`;
+    return this.request(url, { method: 'POST' });
   }
 
   // 获取代理图片URL，解决防盗链问题
@@ -484,6 +512,66 @@ class ApiClient {
     return this.request('/api/settings/crawl', {
       method: 'POST',
       body: JSON.stringify(settings),
+    });
+  }
+
+  // 账号管理
+  async listAccounts(): Promise<{ accounts: Account[] }> {
+    return this.request('/api/accounts');
+  }
+
+  async createAccount(params: { cookie: string; name?: string; make_default?: boolean }) {
+    return this.request('/api/accounts', {
+      method: 'POST',
+      body: JSON.stringify({
+        cookie: params.cookie,
+        name: params.name,
+        make_default: params.make_default ?? false,
+      }),
+    });
+  }
+
+  async deleteAccount(accountId: string) {
+    return this.request(`/api/accounts/${accountId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async setDefaultAccount(accountId: string) {
+    return this.request(`/api/accounts/${accountId}/default`, {
+      method: 'POST',
+    });
+  }
+
+  async assignGroupAccount(groupId: number | string, accountId: string) {
+    return this.request(`/api/groups/${groupId}/assign-account`, {
+      method: 'POST',
+      body: JSON.stringify({ account_id: accountId }),
+    });
+  }
+
+  async getGroupAccount(groupId: number | string): Promise<{ account: Account | null }> {
+    return this.request(`/api/groups/${groupId}/account`);
+  }
+
+  // 账号自我信息（/v3/users/self）
+  async getAccountSelf(accountId: string): Promise<{ self: AccountSelf | null }> {
+    return this.request(`/api/accounts/${accountId}/self`);
+  }
+
+  async refreshAccountSelf(accountId: string): Promise<{ self: AccountSelf | null }> {
+    return this.request(`/api/accounts/${accountId}/self/refresh`, {
+      method: 'POST',
+    });
+  }
+
+  async getGroupAccountSelf(groupId: number | string): Promise<{ self: AccountSelf | null }> {
+    return this.request(`/api/groups/${groupId}/self`);
+  }
+
+  async refreshGroupAccountSelf(groupId: number | string): Promise<{ self: AccountSelf | null }> {
+    return this.request(`/api/groups/${groupId}/self/refresh`, {
+      method: 'POST',
     });
   }
 }

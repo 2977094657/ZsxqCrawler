@@ -14,6 +14,7 @@ import DataPanel from '@/components/DataPanel';
 import TaskPanel from '@/components/TaskPanel';
 import ConfigPanel from '@/components/ConfigPanel';
 import GroupSelector from '@/components/GroupSelector';
+import AccountPanel from '@/components/AccountPanel';
 import { toast } from 'sonner';
 
 export default function Home() {
@@ -215,11 +216,12 @@ export default function Home() {
 
         {/* 主要功能面板 */}
         <Tabs defaultValue="crawl" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="crawl">话题采集</TabsTrigger>
             <TabsTrigger value="files">文件管理</TabsTrigger>
             <TabsTrigger value="data">数据查看</TabsTrigger>
             <TabsTrigger value="tasks">任务状态</TabsTrigger>
+            <TabsTrigger value="accounts">账号管理</TabsTrigger>
           </TabsList>
 
           <TabsContent value="crawl">
@@ -236,6 +238,10 @@ export default function Home() {
 
           <TabsContent value="tasks">
             <TaskPanel />
+          </TabsContent>
+
+          <TabsContent value="accounts">
+            <AccountPanel />
           </TabsContent>
         </Tabs>
       </div>
