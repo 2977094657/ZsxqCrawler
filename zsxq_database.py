@@ -1135,6 +1135,22 @@ class ZSXQDatabase:
                 if files:
                     talk_data["files"] = files
 
+                # 读取文章信息（如有）
+                self.cursor.execute('''
+                    SELECT title, article_id, article_url, inline_article_url
+                    FROM articles
+                    WHERE topic_id = ?
+                    LIMIT 1
+                ''', (topic_id,))
+                article_row = self.cursor.fetchone()
+                if article_row:
+                    talk_data["article"] = {
+                        "title": article_row[0],
+                        "article_id": article_row[1],
+                        "article_url": article_row[2],
+                        "inline_article_url": article_row[3]
+                    }
+
                 topic_detail["talk"] = talk_data
 
             # 3. 获取最新点赞
