@@ -17,6 +17,8 @@ from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 import uvicorn
 import mimetypes
+import random
+import time
 
 # 添加项目根目录到Python路径（现在main.py就在根目录）
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +29,18 @@ if project_root not in sys.path:
 from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config
 from db_path_manager import get_db_path_manager
 from image_cache_manager import get_image_cache_manager
+from accounts_manager import (
+    get_accounts as am_get_accounts,
+    add_account as am_add_account,
+    delete_account as am_delete_account,
+    set_default_account as am_set_default_account,
+    assign_group_account as am_assign_group_account,
+    get_account_for_group as am_get_account_for_group,
+    get_account_summary_for_group as am_get_account_summary_for_group,
+    get_default_account as am_get_default_account,
+    get_account_by_id as am_get_account_by_id,
+)
+from account_info_db import get_account_info_db
 
 app = FastAPI(
     title="知识星球数据采集器 API",
@@ -37,7 +51,7 @@ app = FastAPI(
 # 配置CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # 前端地址
+    allow_origins=["*"],  # 前端地址
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,6 +100,14 @@ class FileDownloadRequest(BaseModel):
     long_sleep_interval_min: Optional[float] = Field(default=None, ge=10.0, le=3600.0, description="随机长休眠间隔最小值（秒）")
     long_sleep_interval_max: Optional[float] = Field(default=None, ge=10.0, le=3600.0, description="随机长休眠间隔最大值（秒）")
 
+class AccountCreateRequest(BaseModel):
+    cookie: str = Field(..., description="账号Cookie")
+    name: Optional[str] = Field(default=None, description="账号名称")
+    make_default: Optional[bool] = Field(default=False, description="是否设为默认账号")
+
+class AssignGroupAccountRequest(BaseModel):
+    account_id: str = Field(..., description="账号ID")
+
 class GroupInfo(BaseModel):
     group_id: int
     name: str
@@ -133,11 +155,11 @@ def get_crawler_for_group(group_id: str, log_callback=None) -> ZSXQInteractiveCr
     if not config:
         raise HTTPException(status_code=500, detail="配置文件加载失败")
 
-    auth_config = config.get('auth', {})
-    cookie = auth_config.get('cookie', '')
+    # 自动匹配该群组所属账号，获取对应Cookie
+    cookie = get_cookie_for_group(group_id)
 
-    if cookie == "your_cookie_here" or not cookie:
-        raise HTTPException(status_code=400, detail="请先在config.toml中配置Cookie")
+    if not cookie or cookie == "your_cookie_here":
+        raise HTTPException(status_code=400, detail="未找到可用Cookie，请先在账号管理或config.toml中配置")
 
     # 使用路径管理器获取指定群组的数据库路径
     path_manager = get_db_path_manager()
@@ -208,6 +230,41 @@ def broadcast_log(task_id: str, log_message: str):
     """广播日志到SSE连接"""
     # 这个函数现在主要用于存储日志，实际的SSE广播在stream端点中实现
     pass
+
+def build_stealth_headers(cookie: str) -> Dict[str, str]:
+    """构造更接近官网的请求头，提升成功率"""
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ]
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7",
+        "Cache-Control": "no-cache",
+        "Cookie": cookie,
+        "Origin": "https://wx.zsxq.com",
+        "Pragma": "no-cache",
+        "Priority": "u=1, i",
+        "Referer": "https://wx.zsxq.com/",
+        "Sec-Ch-Ua": "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"Windows\"",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "User-Agent": random.choice(user_agents),
+        "X-Aduid": "a3be07cd6-dd67-3912-0093-862d844e7fe",
+        "X-Request-Id": f"dcc5cb6ab-1bc3-8273-cc26-{random.randint(100000000000, 999999999999)}",
+        "X-Signature": "733fd672ddf6d4e367730d9622cdd1e28a4b6203",
+        "X-Timestamp": str(int(time.time())),
+        "X-Version": "2.77.0",
+    }
+    return headers
 
 def update_task(task_id: str, status: str, message: str, result: Optional[Dict[str, Any]] = None):
     """更新任务状态"""
@@ -303,6 +360,8 @@ async def update_config(config: ConfigModel):
         # 使用路径管理器获取数据库路径
         path_manager = get_db_path_manager()
         topics_db_path = path_manager.get_topics_db_path(config.group_id)
+        from pathlib import Path
+        safe_topics_db_path = Path(topics_db_path).as_posix()
 
         # 创建配置内容
         config_content = f"""# 知识星球数据采集器配置文件
@@ -317,7 +376,7 @@ group_id = "{config.group_id}"
 
 [database]
 # 数据库文件路径（由路径管理器自动管理）
-path = "{topics_db_path}"
+path = "{safe_topics_db_path}"
 
 [download]
 # 下载目录
@@ -336,6 +395,239 @@ dir = "downloads"
         return {"message": "配置更新成功", "success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+# 账号管理 API
+@app.get("/api/accounts")
+async def list_accounts():
+    try:
+        accounts = am_get_accounts(mask_cookie=True)
+        return {"accounts": accounts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取账号列表失败: {str(e)}")
+
+@app.post("/api/accounts")
+async def create_account(request: AccountCreateRequest):
+    try:
+        acc = am_add_account(request.cookie, request.name, request.make_default or False)
+        safe_acc = am_get_account_by_id(acc.get("id"), mask_cookie=True)
+        return {"account": safe_acc}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"新增账号失败: {str(e)}")
+
+@app.delete("/api/accounts/{account_id}")
+async def remove_account(account_id: str):
+    try:
+        ok = delete_account_success = am_delete_account(account_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除账号失败: {str(e)}")
+
+@app.post("/api/accounts/{account_id}/default")
+async def make_default_account(account_id: str):
+    try:
+        ok = am_set_default_account(account_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"设置默认账号失败: {str(e)}")
+
+@app.post("/api/groups/{group_id}/assign-account")
+async def assign_account_to_group(group_id: str, request: AssignGroupAccountRequest):
+    try:
+        ok, msg = am_assign_group_account(group_id, request.account_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail=msg)
+        return {"success": True, "message": msg}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分配账号失败: {str(e)}")
+
+@app.get("/api/groups/{group_id}/account")
+async def get_group_account(group_id: str):
+    try:
+        summary = get_account_summary_for_group_auto(group_id)
+        return {"account": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取群组账号失败: {str(e)}")
+
+# 账号“自我信息”持久化 (/v3/users/self)
+@app.get("/api/accounts/{account_id}/self")
+async def get_account_self(account_id: str):
+    """获取并返回指定账号的已持久化自我信息；若无则尝试抓取并保存"""
+    try:
+        db = get_account_info_db()
+        info = db.get_self_info(account_id)
+        if info:
+            return {"self": info}
+
+        # 若数据库无记录则抓取
+        acc = am_get_account_by_id(account_id, mask_cookie=False)
+        if not acc:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        cookie = acc.get("cookie", "")
+        if not cookie:
+            raise HTTPException(status_code=400, detail="账号未配置Cookie")
+
+        headers = build_stealth_headers(cookie)
+        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get('succeeded'):
+            raise HTTPException(status_code=400, detail="API返回失败")
+
+        rd = data.get('resp_data', {}) or {}
+        user = rd.get('user', {}) or {}
+        wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
+
+        self_info = {
+            "uid": user.get("uid"),
+            "name": user.get("name") or wechat.get("name"),
+            "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
+            "location": user.get("location"),
+            "user_sid": user.get("user_sid"),
+            "grade": user.get("grade"),
+        }
+        db.upsert_self_info(account_id, self_info, raw_json=data)
+        return {"self": db.get_self_info(account_id)}
+    except HTTPException:
+        raise
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取账号信息失败: {str(e)}")
+
+@app.post("/api/accounts/{account_id}/self/refresh")
+async def refresh_account_self(account_id: str):
+    """强制抓取 /v3/users/self 并更新持久化"""
+    try:
+        acc = am_get_account_by_id(account_id, mask_cookie=False)
+        if not acc:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        cookie = acc.get("cookie", "")
+        if not cookie:
+            raise HTTPException(status_code=400, detail="账号未配置Cookie")
+
+        headers = build_stealth_headers(cookie)
+        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get('succeeded'):
+            raise HTTPException(status_code=400, detail="API返回失败")
+
+        rd = data.get('resp_data', {}) or {}
+        user = rd.get('user', {}) or {}
+        wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
+
+        self_info = {
+            "uid": user.get("uid"),
+            "name": user.get("name") or wechat.get("name"),
+            "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
+            "location": user.get("location"),
+            "user_sid": user.get("user_sid"),
+            "grade": user.get("grade"),
+        }
+        db = get_account_info_db()
+        db.upsert_self_info(account_id, self_info, raw_json=data)
+        return {"self": db.get_self_info(account_id)}
+    except HTTPException:
+        raise
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刷新账号信息失败: {str(e)}")
+
+@app.get("/api/groups/{group_id}/self")
+async def get_group_account_self(group_id: str):
+    """获取群组当前使用账号的自我信息（若无则尝试抓取并保存）"""
+    try:
+        summary = get_account_summary_for_group_auto(group_id)
+        cookie = get_cookie_for_group(group_id)
+        account_id = (summary or {}).get('id', 'default')
+
+        if not cookie:
+            raise HTTPException(status_code=400, detail="未找到可用Cookie，请先配置账号或默认Cookie")
+
+        db = get_account_info_db()
+        info = db.get_self_info(account_id)
+        if info:
+            return {"self": info}
+
+        # 抓取并写入
+        headers = build_stealth_headers(cookie)
+        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get('succeeded'):
+            raise HTTPException(status_code=400, detail="API返回失败")
+
+        rd = data.get('resp_data', {}) or {}
+        user = rd.get('user', {}) or {}
+        wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
+
+        self_info = {
+            "uid": user.get("uid"),
+            "name": user.get("name") or wechat.get("name"),
+            "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
+            "location": user.get("location"),
+            "user_sid": user.get("user_sid"),
+            "grade": user.get("grade"),
+        }
+        db.upsert_self_info(account_id, self_info, raw_json=data)
+        return {"self": db.get_self_info(account_id)}
+    except HTTPException:
+        raise
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取群组账号信息失败: {str(e)}")
+
+@app.post("/api/groups/{group_id}/self/refresh")
+async def refresh_group_account_self(group_id: str):
+    """强制抓取群组当前使用账号的自我信息并持久化"""
+    try:
+        summary = get_account_summary_for_group_auto(group_id)
+        cookie = get_cookie_for_group(group_id)
+        account_id = (summary or {}).get('id', 'default')
+
+        if not cookie:
+            raise HTTPException(status_code=400, detail="未找到可用Cookie，请先配置账号或默认Cookie")
+
+        headers = build_stealth_headers(cookie)
+        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get('succeeded'):
+            raise HTTPException(status_code=400, detail="API返回失败")
+
+        rd = data.get('resp_data', {}) or {}
+        user = rd.get('user', {}) or {}
+        wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
+
+        self_info = {
+            "uid": user.get("uid"),
+            "name": user.get("name") or wechat.get("name"),
+            "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
+            "location": user.get("location"),
+            "user_sid": user.get("user_sid"),
+            "grade": user.get("grade"),
+        }
+        db = get_account_info_db()
+        db.upsert_self_info(account_id, self_info, raw_json=data)
+        return {"self": db.get_self_info(account_id)}
+    except HTTPException:
+        raise
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刷新群组账号信息失败: {str(e)}")
 
 @app.get("/api/database/stats")
 async def get_database_stats():
@@ -443,9 +735,8 @@ def run_crawl_historical_task(task_id: str, group_id: str, pages: int, per_page:
             return is_task_stopped(task_id)
 
         # 为每个任务创建独立的爬虫实例，使用传入的group_id
-        config = load_config()
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
+        # 自动匹配该群组所属账号，获取对应Cookie
+        cookie = get_cookie_for_group(group_id)
         # 使用传入的group_id而不是配置文件中的固定值
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
@@ -513,9 +804,8 @@ def run_file_download_task(task_id: str, group_id: str, max_files: Optional[int]
             return is_task_stopped(task_id)
 
         # 为每个任务创建独立的文件下载器实例，使用传入的group_id
-        config = load_config()
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
+        # 自动匹配该群组所属账号，获取对应Cookie
+        cookie = get_cookie_for_group(group_id)
 
         # 使用传入的group_id而不是配置文件中的固定值
         from zsxq_file_downloader import ZSXQFileDownloader
@@ -601,9 +891,8 @@ def run_single_file_download_task(task_id: str, group_id: str, file_id: int):
             return is_task_stopped(task_id)
 
         # 创建文件下载器实例
-        config = load_config()
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
+        # 自动匹配该群组所属账号，获取对应Cookie
+        cookie = get_cookie_for_group(group_id)
 
         from zsxq_file_downloader import ZSXQFileDownloader
         from db_path_manager import get_db_path_manager
@@ -727,9 +1016,8 @@ def run_single_file_download_task_with_info(task_id: str, group_id: str, file_id
             return is_task_stopped(task_id)
 
         # 创建文件下载器实例
-        config = load_config()
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
+        # 自动匹配该群组所属账号，获取对应Cookie
+        cookie = get_cookie_for_group(group_id)
 
         from zsxq_file_downloader import ZSXQFileDownloader
         from db_path_manager import get_db_path_manager
@@ -960,13 +1248,7 @@ def fetch_groups_from_api(cookie: str) -> List[dict]:
             }
         ]
 
-    headers = {
-        'Cookie': cookie,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Referer': 'https://wx.zsxq.com/',
-    }
+    headers = build_stealth_headers(cookie)
 
     try:
         response = requests.get('https://api.zsxq.com/v2/groups', headers=headers, timeout=30)
@@ -1019,7 +1301,9 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                 # 为这个任务创建新的爬虫实例（带日志回调），使用传入的group_id
                 config = load_config()
                 auth_config = config.get('auth', {})
-                cookie = auth_config.get('cookie', '')
+                default_cookie = auth_config.get('cookie', '')
+                account = am_get_account_for_group(group_id)
+                cookie = account.get('cookie', '') if account else default_cookie
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
@@ -1105,7 +1389,9 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                 # 为每个任务创建独立的爬虫实例
                 config = load_config()
                 auth_config = config.get('auth', {})
-                cookie = auth_config.get('cookie', '')
+                default_cookie = auth_config.get('cookie', '')
+                account = am_get_account_for_group(group_id)
+                cookie = account.get('cookie', '') if account else default_cookie
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
@@ -1172,7 +1458,9 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                 # 为每个任务创建独立的爬虫实例，使用传入的group_id
                 config = load_config()
                 auth_config = config.get('auth', {})
-                cookie = auth_config.get('cookie', '')
+                default_cookie = auth_config.get('cookie', '')
+                account = am_get_account_for_group(group_id)
+                cookie = account.get('cookie', '') if account else default_cookie
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
@@ -1246,7 +1534,9 @@ async def collect_files(group_id: str, background_tasks: BackgroundTasks):
                 # 为每个任务创建独立的文件下载器实例
                 config = load_config()
                 auth_config = config.get('auth', {})
-                cookie = auth_config.get('cookie', '')
+                default_cookie = auth_config.get('cookie', '')
+                account = am_get_account_for_group(group_id)
+                cookie = account.get('cookie', '') if account else default_cookie
 
                 from zsxq_file_downloader import ZSXQFileDownloader
                 from db_path_manager import get_db_path_manager
@@ -1759,6 +2049,9 @@ async def get_groups():
         # 从API获取群组列表
         groups_data = fetch_groups_from_api(cookie)
 
+        # 自动构建群组→账号的映射（无需手动绑定）
+        group_account_map = build_account_group_detection()
+
         # 处理群组数据
         groups = []
         for group in groups_data:
@@ -1805,7 +2098,8 @@ async def get_groups():
                 "description": group.get('description', ''),
                 "is_trial": is_trial,
                 "trial_end_time": trial.get('end_time'),
-                "membership_end_time": validity.get('end_time')
+                "membership_end_time": validity.get('end_time'),
+                "account": group_account_map.get(str(group.get('group_id')))
             }
             groups.append(group_info)
 
@@ -1919,6 +2213,71 @@ async def fetch_more_comments(topic_id: int, group_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取更多评论失败: {str(e)}")
+
+# 单个话题采集 API
+@app.post("/api/topics/fetch-single/{group_id}/{topic_id}")
+async def fetch_single_topic(group_id: str, topic_id: int, fetch_comments: bool = True):
+    """爬取并导入单个话题（用于特殊话题测试），可选拉取完整评论"""
+    try:
+        # 使用该群的自动匹配账号
+        crawler = get_crawler_for_group(str(group_id))
+
+        # 拉取话题详细信息
+        url = f"https://api.zsxq.com/v2/topics/{topic_id}/info"
+        headers = crawler.get_stealth_headers()
+        response = requests.get(url, headers=headers, timeout=30)
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail="API请求失败")
+
+        data = response.json()
+        if not data.get("succeeded") or not data.get("resp_data"):
+            raise HTTPException(status_code=400, detail="API返回失败")
+
+        topic = (data.get("resp_data", {}) or {}).get("topic", {}) or {}
+
+        if not topic:
+            raise HTTPException(status_code=404, detail="未获取到有效话题数据")
+
+        # 校验话题所属群组一致性
+        topic_group_id = str((topic.get("group") or {}).get("group_id", ""))
+        if topic_group_id and topic_group_id != str(group_id):
+            raise HTTPException(status_code=400, detail="该话题不属于当前群组")
+
+        # 判断话题是否已存在
+        crawler.db.cursor.execute('SELECT topic_id FROM topics WHERE topic_id = ?', (topic_id,))
+        existed = crawler.db.cursor.fetchone() is not None
+
+        # 导入话题完整数据
+        crawler.db.import_topic_data(topic)
+        crawler.db.conn.commit()
+
+        # 可选：获取完整评论
+        comments_fetched = 0
+        if fetch_comments:
+            comments_count = topic.get("comments_count", 0) or 0
+            if comments_count > 0:
+                try:
+                    additional_comments = crawler.fetch_all_comments(topic_id, comments_count)
+                    if additional_comments:
+                        crawler.db.import_additional_comments(topic_id, additional_comments)
+                        crawler.db.conn.commit()
+                        comments_fetched = len(additional_comments)
+                except Exception as e:
+                    # 不阻塞主流程
+                    print(f"⚠️ 单话题评论获取失败: {e}")
+
+        return {
+            "success": True,
+            "topic_id": topic_id,
+            "group_id": int(group_id),
+            "imported": "updated" if existed else "created",
+            "comments_fetched": comments_fetched
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"单个话题采集失败: {str(e)}")
 
 # 标签相关API端点
 @app.get("/api/groups/{group_id}/tags")
@@ -2062,12 +2421,11 @@ async def update_crawl_settings(settings: dict):
 async def get_group_info(group_id: str):
     """获取群组信息"""
     try:
-        config = load_config()
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
+        # 自动匹配该群组所属账号，获取对应Cookie
+        cookie = get_cookie_for_group(group_id)
 
         if not cookie:
-            raise HTTPException(status_code=400, detail="未配置Cookie")
+            raise HTTPException(status_code=400, detail="未找到可用Cookie，请先在账号管理或config.toml中配置")
 
         # 获取群组信息
         import requests
@@ -2087,7 +2445,8 @@ async def get_group_info(group_id: str):
                     "name": group_data.get('name'),
                     "description": group_data.get('description'),
                     "statistics": group_data.get('statistics', {}),
-                    "background_url": group_data.get('background_url')
+                    "background_url": group_data.get('background_url'),
+                    "account": am_get_account_summary_for_group(group_id)
                 }
             else:
                 raise HTTPException(status_code=400, detail="获取群组信息失败")
@@ -2564,6 +2923,122 @@ async def update_downloader_settings(request: DownloaderSettingsRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新下载器设置失败: {str(e)}")
+
+# =========================
+# 自动账号匹配缓存与辅助函数
+# =========================
+ACCOUNT_DETECT_TTL_SECONDS = 300
+_account_detect_cache: Dict[str, Any] = {
+    "built_at": 0,
+    "group_to_account": {},
+    "cookie_by_account": {}
+}
+
+def _get_all_account_sources() -> List[Dict[str, Any]]:
+    """组合账号来源：accounts.json + config.toml默认账号"""
+    sources: List[Dict[str, Any]] = []
+    try:
+        # 账号管理中的账号（含cookie）
+        accounts = am_get_accounts(mask_cookie=False)
+        if accounts:
+            sources.extend(accounts)
+    except Exception:
+        pass
+    # 追加 config.toml 的默认cookie作为伪账号
+    try:
+        cfg = load_config()
+        auth = cfg.get('auth', {}) if cfg else {}
+        default_cookie = auth.get('cookie', '')
+        if default_cookie and default_cookie != "your_cookie_here":
+            sources.append({
+                "id": "default",
+                "name": "默认账号",
+                "cookie": default_cookie,
+                "is_default": True,
+                "created_at": None
+            })
+    except Exception:
+        pass
+    return sources
+
+def build_account_group_detection(force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+    """
+    构建自动匹配映射：group_id -> 账号摘要
+    遍历所有账号来源，调用官方 /v2/groups 获取其可访问群组进行比对。
+    使用内存缓存减少频繁请求。
+    """
+    now = time.time()
+    cache = _account_detect_cache
+    if (not force_refresh
+        and cache.get("group_to_account")
+        and now - cache.get("built_at", 0) < ACCOUNT_DETECT_TTL_SECONDS):
+        return cache["group_to_account"]
+
+    group_to_account: Dict[str, Dict[str, Any]] = {}
+    cookie_by_account: Dict[str, str] = {}
+
+    sources = _get_all_account_sources()
+    for src in sources:
+        cookie = src.get("cookie", "")
+        acc_id = src.get("id", "default")
+        if not cookie or cookie == "your_cookie_here":
+            continue
+
+        # 记录账号对应cookie
+        cookie_by_account[acc_id] = cookie
+
+        try:
+            groups = fetch_groups_from_api(cookie)
+            for g in groups or []:
+                gid = str(g.get("group_id"))
+                if gid and gid not in group_to_account:
+                    group_to_account[gid] = {
+                        "id": acc_id,
+                        "name": src.get("name") or ("默认账号" if acc_id == "default" else acc_id),
+                        "is_default": bool(src.get("is_default") or acc_id == "default"),
+                        "created_at": src.get("created_at"),
+                        "cookie": "***"
+                    }
+        except Exception:
+            # 忽略单个账号失败
+            continue
+
+    cache["group_to_account"] = group_to_account
+    cache["cookie_by_account"] = cookie_by_account
+    cache["built_at"] = now
+    return group_to_account
+
+def get_cookie_for_group(group_id: str) -> str:
+    """根据自动匹配结果选择用于该群组的Cookie，失败则回退到config.toml"""
+    mapping = build_account_group_detection(force_refresh=False)
+    summary = mapping.get(str(group_id))
+    cookie = None
+    if summary:
+        cookie = _account_detect_cache.get("cookie_by_account", {}).get(summary["id"])
+    if not cookie:
+        cfg = load_config()
+        auth = cfg.get('auth', {}) if cfg else {}
+        cookie = auth.get('cookie', '')
+    return cookie
+
+def get_account_summary_for_group_auto(group_id: str) -> Optional[Dict[str, Any]]:
+    """返回自动匹配到的账号摘要；若无命中且存在默认cookie，则返回默认占位摘要"""
+    mapping = build_account_group_detection(force_refresh=False)
+    summary = mapping.get(str(group_id))
+    if summary:
+        return summary
+    cfg = load_config()
+    auth = cfg.get('auth', {}) if cfg else {}
+    default_cookie = auth.get('cookie', '')
+    if default_cookie:
+        return {
+            "id": "default",
+            "name": "默认账号",
+            "is_default": True,
+            "created_at": None,
+            "cookie": "***"
+        }
+    return None
 
 if __name__ == "__main__":
     import sys
