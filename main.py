@@ -401,6 +401,19 @@ dir = "downloads"
 async def list_accounts():
     try:
         accounts = am_get_accounts(mask_cookie=True)
+        # 若未添加本地账号，但在 config.toml 中存在默认 Cookie，则返回一个“默认账号”占位
+        if not accounts:
+            cfg = load_config()
+            auth = cfg.get('auth', {}) if cfg else {}
+            default_cookie = auth.get('cookie', '')
+            if default_cookie and default_cookie != "your_cookie_here":
+                accounts = [{
+                    "id": "default",
+                    "name": "默认账号",
+                    "cookie": "***",
+                    "is_default": True,
+                    "created_at": None,
+                }]
         return {"accounts": accounts}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取账号列表失败: {str(e)}")
@@ -468,11 +481,18 @@ async def get_account_self(account_id: str):
         if info:
             return {"self": info}
 
-        # 若数据库无记录则抓取
+        # 若数据库无记录则抓取，支持 'default' 伪账号（来自 config.toml）
+        cookie = None
         acc = am_get_account_by_id(account_id, mask_cookie=False)
-        if not acc:
+        if acc:
+            cookie = acc.get("cookie", "")
+        elif account_id == "default":
+            cfg = load_config()
+            auth = cfg.get('auth', {}) if cfg else {}
+            cookie = auth.get('cookie', '')
+        else:
             raise HTTPException(status_code=404, detail="账号不存在")
-        cookie = acc.get("cookie", "")
+
         if not cookie:
             raise HTTPException(status_code=400, detail="账号未配置Cookie")
 
@@ -508,10 +528,18 @@ async def get_account_self(account_id: str):
 async def refresh_account_self(account_id: str):
     """强制抓取 /v3/users/self 并更新持久化"""
     try:
+        # 支持 'default' 伪账号（来自 config.toml）
+        cookie = None
         acc = am_get_account_by_id(account_id, mask_cookie=False)
-        if not acc:
+        if acc:
+            cookie = acc.get("cookie", "")
+        elif account_id == "default":
+            cfg = load_config()
+            auth = cfg.get('auth', {}) if cfg else {}
+            cookie = auth.get('cookie', '')
+        else:
             raise HTTPException(status_code=404, detail="账号不存在")
-        cookie = acc.get("cookie", "")
+
         if not cookie:
             raise HTTPException(status_code=400, detail="账号未配置Cookie")
 
