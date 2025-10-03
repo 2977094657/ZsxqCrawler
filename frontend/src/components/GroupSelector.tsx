@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Users, MessageSquare, Crown } from 'lucide-react';
+import { Users, MessageSquare, Crown, UserCog } from 'lucide-react';
 import { apiClient, Group, GroupStats, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
 import SafeImage from './SafeImage';
@@ -213,10 +213,24 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
     <div className="min-h-screen bg-background">
       <div className="container mx-auto p-6">
         <div className="mb-8">
-          <h1 className="text-4xl font-bold mb-2">🌟 知识星球数据采集器</h1>
-          <p className="text-muted-foreground">
-            选择要操作的知识星球群组
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-4xl font-bold mb-2">🌟 知识星球数据采集器</h1>
+              <p className="text-muted-foreground">
+                选择要操作的知识星球群组
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => router.push('/accounts')}
+                className="flex items-center gap-2"
+              >
+                <UserCog className="h-4 w-4" />
+                账号管理
+              </Button>
+            </div>
+          </div>
         </div>
 
         {/* 群组统计 */}
