@@ -66,6 +66,8 @@ export default function TaskPanel() {
         return '📋 收集文件列表';
       case 'download_files':
         return '⬇️ 下载文件';
+      case 'crawl_time_range':
+        return '🗓️ 按时间区间爬取';
       default:
         return type;
     }

@@ -1226,8 +1226,8 @@ class ZSXQInteractiveCrawler:
         # 检查数据库状态
         timestamp_info = self.db.get_timestamp_range_info()
         if not timestamp_info['has_data']:
-            print("❌ 数据库为空，请先进行历史数据爬取")
-            return {'new_topics': 0, 'updated_topics': 0, 'errors': 0, 'pages': 0}
+            self.log("📊 数据库为空，将从最新开始爬取")
+            # 空库场景：直接从最新开始增量，直到与已存数据衔接或无更多数据
         
         print(f"📊 数据库状态:")
         print(f"   现有话题数: {timestamp_info['total_topics']}")

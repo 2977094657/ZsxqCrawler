@@ -284,6 +284,13 @@ class ApiClient {
     });
   }
 
+  // 删除单个话题
+  async deleteSingleTopic(groupId: number | string, topicId: number | string) {
+    return this.request(`/api/topics/${topicId}/${groupId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // 单个话题采集（测试特殊话题）
   async fetchSingleTopic(groupId: number | string, topicId: number, fetchComments: boolean = false) {
     const params = new URLSearchParams();
@@ -572,6 +579,25 @@ class ApiClient {
   async refreshGroupAccountSelf(groupId: number | string): Promise<{ self: AccountSelf | null }> {
     return this.request(`/api/groups/${groupId}/self/refresh`, {
       method: 'POST',
+    });
+  }
+  async crawlByTimeRange(
+    groupId: number,
+    params: {
+      startTime?: string;
+      endTime?: string;
+      lastDays?: number;
+      perPage?: number;
+      crawlIntervalMin?: number;
+      crawlIntervalMax?: number;
+      longSleepIntervalMin?: number;
+      longSleepIntervalMax?: number;
+      pagesPerBatch?: number;
+    }
+  ) {
+    return this.request(`/api/crawl/range/${groupId}`, {
+      method: 'POST',
+      body: JSON.stringify(params || {}),
     });
   }
 }

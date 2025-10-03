@@ -11,6 +11,7 @@ import { Settings } from 'lucide-react';
 import { apiClient, Group } from '@/lib/api';
 import { toast } from 'sonner';
 import CrawlSettingsDialog from './CrawlSettingsDialog';
+import CrawlLatestDialog from './CrawlLatestDialog';
 
 interface CrawlPanelProps {
   onStatsUpdate: () => void;
@@ -28,6 +29,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
 
   // 爬取设置状态
   const [crawlSettingsOpen, setCrawlSettingsOpen] = useState(false);
+  const [crawlLatestOpen, setCrawlLatestOpen] = useState(false);
   const [crawlInterval, setCrawlInterval] = useState(3.5);
   const [longSleepInterval, setLongSleepInterval] = useState(240);
   const [pagesPerBatch, setPagesPerBatch] = useState(15);
@@ -90,7 +92,59 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
       setLoading(null);
     }
   };
+  
+  const handleCrawlLatestConfirm = async (params: {
+    mode: 'latest' | 'range';
+    startTime?: string;
+    endTime?: string;
+    lastDays?: number;
+    perPage?: number;
+  }) => {
+    if (!selectedGroup) {
+      toast.error('请先选择一个群组');
+      return;
+    }
 
+    try {
+      setLoading('latest');
+
+      // 构建爬取设置
+      const crawlSettings = {
+        crawlIntervalMin,
+        crawlIntervalMax,
+        longSleepIntervalMin,
+        longSleepIntervalMax,
+        pagesPerBatch: Math.max(pagesPerBatch, 5),
+      };
+
+      let response: any;
+
+      if (params.mode === 'latest') {
+        response = await apiClient.crawlLatestUntilComplete(selectedGroup.group_id, crawlSettings);
+      } else {
+        response = await apiClient.crawlByTimeRange(selectedGroup.group_id, {
+          startTime: params.startTime,
+          endTime: params.endTime,
+          lastDays: params.lastDays,
+          perPage: params.perPage,
+          crawlIntervalMin,
+          crawlIntervalMax,
+          longSleepIntervalMin,
+          longSleepIntervalMax,
+          pagesPerBatch: Math.max(pagesPerBatch, 5),
+        });
+      }
+
+      toast.success(`任务已创建: ${response.task_id}`);
+      onStatsUpdate();
+      setCrawlLatestOpen(false);
+    } catch (error) {
+      toast.error(`创建任务失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setLoading(null);
+    }
+  };
+  
   // 处理爬取设置变更
   const handleCrawlSettingsChange = (settings: {
     crawlInterval: number;
@@ -156,6 +210,31 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {/* 获取最新话题 */}
+      <Card className="border border-gray-200 shadow-none">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Badge variant="secondary">🆕</Badge>
+            获取最新话题
+          </CardTitle>
+          <CardDescription>
+            默认从最新开始，也可按时间区间采集
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="text-sm text-muted-foreground space-y-2">
+            <p>✅ 默认：直接从最新话题开始增量抓取</p>
+            <p>🕒 可选：按时间区间采集（首次也可用）</p>
+          </div>
+          <Button
+            onClick={() => setCrawlLatestOpen(true)}
+            disabled={loading === 'latest'}
+            className="w-full"
+          >
+            {loading === 'latest' ? '创建任务中...' : '获取最新'}
+          </Button>
+        </CardContent>
+      </Card>
       {/* 增量爬取历史 */}
       <Card className="border border-gray-200 shadow-none">
         <CardHeader>
@@ -304,6 +383,14 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
       </Card>
       </div>
 
+      <CrawlLatestDialog
+        open={crawlLatestOpen}
+        onOpenChange={setCrawlLatestOpen}
+        submitting={loading === 'latest'}
+        onConfirm={handleCrawlLatestConfirm}
+        defaultLastDays={7}
+        defaultPerPage={20}
+      />
       {/* 爬取设置对话框 */}
       <CrawlSettingsDialog
         open={crawlSettingsOpen}
