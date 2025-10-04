@@ -66,6 +66,123 @@ sse_connections: Dict[str, List] = {}  # 存储SSE连接
 task_stop_flags: Dict[str, bool] = {}  # 任务停止标志
 file_downloader_instances: Dict[str, Any] = {}  # 存储文件下载器实例
 
+# =========================
+# 本地群扫描（output 目录）
+# =========================
+
+# 可配置：默认 ./output；可通过环境变量 OUTPUT_DIR 覆盖
+LOCAL_OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
+# 处理上限保护，默认 10000；可通过 LOCAL_GROUPS_SCAN_LIMIT 覆盖
+try:
+    LOCAL_SCAN_LIMIT = int(os.environ.get("LOCAL_GROUPS_SCAN_LIMIT", "10000"))
+except Exception:
+    LOCAL_SCAN_LIMIT = 10000
+
+# 本地群缓存
+_local_groups_cache = {
+    "ids": set(),     # set[int]
+    "scanned_at": 0.0 # epoch 秒
+}
+
+
+def _safe_listdir(path: str):
+    """安全列目录，异常不抛出，返回空列表并告警"""
+    try:
+        return os.listdir(path)
+    except Exception as e:
+        print(f"⚠️ 无法读取目录 {path}: {e}")
+        return []
+
+
+def _collect_numeric_dirs(base: str, limit: int) -> set:
+    """
+    扫描 base 的一级子目录，收集纯数字目录名（^\d+$）作为群ID。
+    忽略：非目录、软链接、隐藏目录（以 . 开头）。
+    """
+    ids = set()
+    if not base:
+        return ids
+
+    base_abs = os.path.abspath(base)
+    if not (os.path.exists(base_abs) and os.path.isdir(base_abs)):
+        # 视为空集合，不报错
+        print(f"⚠️ 目录不存在或不可读: {base_abs}，视为空集合")
+        return ids
+
+    processed = 0
+    for name in _safe_listdir(base_abs):
+        # 隐藏目录
+        if not name or name.startswith('.'):
+            continue
+
+        path = os.path.join(base_abs, name)
+        try:
+            # 软链接/非目录忽略
+            if os.path.islink(path) or not os.path.isdir(path):
+                continue
+
+            # 仅纯数字目录名
+            if name.isdigit():
+                ids.add(int(name))
+                processed += 1
+                if processed >= limit:
+                    print(f"⚠️ 子目录数量超过上限 {limit}，已截断")
+                    break
+        except Exception:
+            # 单项失败安全降级
+            continue
+
+    return ids
+
+
+def scan_local_groups(output_dir: str = None, limit: int = None) -> set:
+    """
+    扫描本地 output 的一级子目录，获取群ID集合。
+    同时兼容 output/databases 结构（如存在）。
+    同步执行（用于手动刷新或强制刷新），异常安全降级。
+    """
+    try:
+        odir = output_dir or LOCAL_OUTPUT_DIR
+        lim = int(limit or LOCAL_SCAN_LIMIT)
+
+        # 主路径：仅扫描 output 的一级子目录
+        ids_primary = _collect_numeric_dirs(odir, lim)
+
+        # 兼容路径：output/databases 的一级子目录（若存在）
+        ids_secondary = _collect_numeric_dirs(os.path.join(odir, "databases"), lim)
+
+        ids = set(ids_primary) | set(ids_secondary)
+
+        # 更新缓存
+        _local_groups_cache["ids"] = ids
+        _local_groups_cache["scanned_at"] = time.time()
+
+        return ids
+    except Exception as e:
+        print(f"⚠️ 本地群扫描异常: {e}")
+        # 安全降级为旧缓存
+        return _local_groups_cache.get("ids", set())
+
+
+def get_cached_local_group_ids(force_refresh: bool = False) -> set:
+    """
+    获取缓存中的本地群ID集合；可选强制刷新。
+    未扫描过或要求强更时触发同步扫描。
+    """
+    if force_refresh or not _local_groups_cache.get("ids"):
+        return scan_local_groups()
+    return _local_groups_cache.get("ids", set())
+
+
+@app.on_event("startup")
+async def _init_local_groups_scan():
+    """
+    应用启动时后台异步执行一次扫描，不阻塞主线程。
+    """
+    try:
+        await asyncio.to_thread(scan_local_groups)
+    except Exception as e:
+        print(f"⚠️ 启动扫描本地群失败: {e}")
 # Pydantic模型定义
 class ConfigModel(BaseModel):
     cookie: str = Field(..., description="知识星球Cookie")
@@ -2062,37 +2179,54 @@ async def get_files(group_id: str, page: int = 1, per_page: int = 20, status: Op
         raise HTTPException(status_code=500, detail=f"获取文件列表失败: {str(e)}")
 
 # 群组相关API端点
+@app.post("/api/local-groups/refresh")
+async def refresh_local_groups():
+    """
+    手动刷新本地群（output）扫描缓存；不抛错，异常时返回旧缓存。
+    """
+    try:
+        ids = await asyncio.to_thread(scan_local_groups)
+        return {"success": True, "count": len(ids), "groups": sorted(list(ids))}
+    except Exception as e:
+        cached = get_cached_local_group_ids(force_refresh=False) or set()
+        # 不报错，返回降级结果
+        return {"success": False, "count": len(cached), "groups": sorted(list(cached)), "error": str(e)}
+
 @app.get("/api/groups")
 async def get_groups():
-    """获取用户可访问的群组列表"""
+    """获取群组列表：账号群 ∪ 本地目录群（去重合并）"""
     try:
-        # 检查是否已配置
-        if not is_configured():
-            raise HTTPException(status_code=400, detail="请先配置Cookie和群组ID")
-
-        config = load_config()
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
-
-        # 从API获取群组列表
-        groups_data = fetch_groups_from_api(cookie)
-
-        # 自动构建群组→账号的映射（无需手动绑定）
+        # 自动构建群组→账号映射（多账号支持）
         group_account_map = build_account_group_detection()
+        local_ids = get_cached_local_group_ids(force_refresh=False)
 
-        # 处理群组数据
-        groups = []
-        for group in groups_data:
+        # 获取“当前账号”的群列表（若未配置则视为空集合）
+        groups_data: List[dict] = []
+        try:
+            if is_configured():
+                config = load_config()
+                auth_config = config.get('auth', {}) if config else {}
+                cookie = auth_config.get('cookie', '') or ''
+                if cookie and cookie != "your_cookie_here":
+                    groups_data = fetch_groups_from_api(cookie)
+        except Exception as e:
+            # 不阻断，记录告警
+            print(f"⚠️ 获取账号群失败，降级为本地集合: {e}")
+            groups_data = []
+
+        # 组装账号侧群为字典（id -> info）
+        by_id: Dict[int, dict] = {}
+
+        for group in groups_data or []:
             # 提取用户特定信息
-            user_specific = group.get('user_specific', {})
-            validity = user_specific.get('validity', {})
-            trial = user_specific.get('trial', {})
+            user_specific = group.get('user_specific', {}) or {}
+            validity = user_specific.get('validity', {}) or {}
+            trial = user_specific.get('trial', {}) or {}
 
-            # 确定真正的过期时间：优先使用试用期过期时间
+            # 过期信息与状态
             actual_expiry_time = trial.get('end_time') or validity.get('end_time')
             is_trial = bool(trial.get('end_time'))
 
-            # 计算群组状态
             status = None
             if actual_expiry_time:
                 from datetime import datetime, timezone
@@ -2100,23 +2234,28 @@ async def get_groups():
                     end_time = datetime.fromisoformat(actual_expiry_time.replace('Z', '+00:00'))
                     now = datetime.now(timezone.utc)
                     days_until_expiry = (end_time - now).days
-
                     if days_until_expiry < 0:
                         status = 'expired'
                     elif days_until_expiry <= 7:
                         status = 'expiring_soon'
                     else:
                         status = 'active'
-                except:
+                except Exception:
                     pass
 
-            group_info = {
-                "group_id": group.get('group_id'),
+            gid = group.get('group_id')
+            try:
+                gid = int(gid)
+            except Exception:
+                continue
+
+            info = {
+                "group_id": gid,
                 "name": group.get('name', ''),
                 "type": group.get('type', ''),
                 "background_url": group.get('background_url', ''),
-                "owner": group.get('owner', {}),
-                "statistics": group.get('statistics', {}),
+                "owner": group.get('owner', {}) or {},
+                "statistics": group.get('statistics', {}) or {},
                 "status": status,
                 "create_time": group.get('create_time'),
                 "subscription_time": validity.get('begin_time'),
@@ -2127,13 +2266,51 @@ async def get_groups():
                 "is_trial": is_trial,
                 "trial_end_time": trial.get('end_time'),
                 "membership_end_time": validity.get('end_time'),
-                "account": group_account_map.get(str(group.get('group_id')))
+                "account": group_account_map.get(str(gid)),
+                "source": "account"
             }
-            groups.append(group_info)
+            by_id[gid] = info
+
+        # 合并本地目录群
+        for gid in local_ids or []:
+            try:
+                gid_int = int(gid)
+            except Exception:
+                continue
+            if gid_int in by_id:
+                # 标注来源为 account|local
+                src = by_id[gid_int].get("source", "account")
+                if "local" not in src:
+                    by_id[gid_int]["source"] = "account|local"
+            else:
+                # 仅存在于本地
+                by_id[gid_int] = {
+                    "group_id": gid_int,
+                    "name": "本地群（未绑定账号）",
+                    "type": "local",
+                    "background_url": "",
+                    "owner": {},
+                    "statistics": {},
+                    "status": None,
+                    "create_time": None,
+                    "subscription_time": None,
+                    "expiry_time": None,
+                    "join_time": None,
+                    "last_active_time": None,
+                    "description": "",
+                    "is_trial": False,
+                    "trial_end_time": None,
+                    "membership_end_time": None,
+                    "account": None,
+                    "source": "local"
+                }
+
+        # 排序：按群ID升序；如需二级排序再按来源（账号优先）
+        merged = [by_id[k] for k in sorted(by_id.keys())]
 
         return {
-            "groups": groups,
-            "total": len(groups)
+            "groups": merged,
+            "total": len(merged)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取群组列表失败: {str(e)}")
