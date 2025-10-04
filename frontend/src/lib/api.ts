@@ -91,6 +91,7 @@ export interface Group {
   join_time?: string;
   last_active_time?: string;
   status?: string;
+  source?: string; // "account" | "local" | "account|local"
   is_trial?: boolean;
   trial_end_time?: string;
   membership_end_time?: string;
@@ -428,6 +429,12 @@ class ApiClient {
   }
 
   // 群组相关
+  async refreshLocalGroups(): Promise<{ success: boolean; count: number; groups: number[]; error?: string }> {
+    return this.request('/api/local-groups/refresh', {
+      method: 'POST',
+    });
+  }
+
   async getGroups(): Promise<{groups: Group[], total: number}> {
     return this.request('/api/groups');
   }

@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Users, MessageSquare, Crown, UserCog } from 'lucide-react';
+import { Users, MessageSquare, Crown, UserCog, RefreshCw } from 'lucide-react';
 import { apiClient, Group, GroupStats, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
 import SafeImage from './SafeImage';
@@ -44,10 +44,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
 
       const data = await apiClient.getGroups();
 
-      // 检查是否获取到有效数据
-      if (!data || !data.groups || data.groups.length === 0) {
-        throw new Error('API返回空数据，可能是反爬虫机制');
-      }
+      // 检查返回数据（允许为空，显示空态，不再抛错）
 
       setGroups(data.groups);
 
@@ -122,6 +119,17 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   };
 
 
+
+  const handleRefresh = async () => {
+    try {
+      await apiClient.refreshLocalGroups();
+      await loadGroups(0);
+      toast.success('已刷新本地群目录');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`刷新失败: ${msg}`);
+    }
+  };
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '';
@@ -221,6 +229,14 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={handleRefresh}
+                className="flex items-center gap-2"
+              >
+                <RefreshCw className="h-4 w-4" />
+                刷新本地群
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => router.push('/accounts')}
@@ -342,6 +358,16 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                           {group.type === 'free' ? '免费' : group.type}
                         </Badge>
                       )}
+
+                      {/* 来源标签 */}
+                      <div className="flex items-center gap-1">
+                        {group.source?.includes('account') && (
+                          <Badge variant="secondary" className="text-xs">账号</Badge>
+                        )}
+                        {group.source?.includes('local') && (
+                          <Badge variant="outline" className="text-xs">本地</Badge>
+                        )}
+                      </div>
                     </div>
 
                     {/* 时间信息 */}
