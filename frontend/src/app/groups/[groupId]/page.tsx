@@ -22,7 +22,8 @@ import DownloadSettingsDialog from '@/components/DownloadSettingsDialog';
 import CrawlSettingsDialog from '@/components/CrawlSettingsDialog';
 import ImageGallery from '@/components/ImageGallery';
 
-
+// 话题详情缓存，避免重复请求
+const topicDetailCache: Map<string, any> = new Map();
 
 export default function GroupDetailPage() {
   const params = useParams();
@@ -77,6 +78,8 @@ export default function GroupDetailPage() {
 
 
 
+  const [topicDetails, setTopicDetails] = useState<Map<number, any>>(new Map());
+  const inFlightRef = useRef<Map<string, Promise<any>>>(new Map());
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
 
@@ -164,6 +167,35 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   useEffect(() => {
     loadTopics();
   }, [currentPage, searchTerm, selectedTag]);
+
+  // 批量预取当前页话题详情，带去重
+  useEffect(() => {
+    if (!topics || topics.length === 0) return;
+    topics.forEach((t: any) => {
+      const tid = Number(t?.topic_id);
+      if (!tid || Number.isNaN(tid)) return;
+      if (topicDetails.has(tid)) return;
+      const key = `${groupId}-${tid}`;
+      if (inFlightRef.current.get(key)) return;
+
+      const p = apiClient.getTopicDetail(tid, groupId)
+        .then((detail) => {
+          setTopicDetails(prev => {
+            const next = new Map(prev);
+            next.set(tid, detail);
+            return next;
+          });
+        })
+        .catch((err) => {
+          console.error('预取话题详情失败:', err);
+        })
+        .finally(() => {
+          inFlightRef.current.delete(key);
+        });
+
+      inFlightRef.current.set(key, p);
+    });
+  }, [topics, groupId]);
 
 
 
@@ -1054,28 +1086,11 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   };
 
   // 话题卡片组件
-  const TopicCard = ({ topic, searchTerm }: { topic: any; searchTerm?: string }) => {
-    const [topicDetail, setTopicDetail] = useState<any>(null);
-    const [loading, setLoading] = useState(false);
+  const TopicCard = ({ topic, searchTerm, topicDetail }: { topic: any; searchTerm?: string; topicDetail?: any }) => {
     const cardRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
 
-    // 加载话题详情
-    useEffect(() => {
-      const loadTopicDetail = async () => {
-        setLoading(true);
-        try {
-          const detail = await apiClient.getTopicDetail(topic.topic_id, groupId);
-          setTopicDetail(detail);
-        } catch (error) {
-          console.error('获取话题详情失败:', error);
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      loadTopicDetail();
-    }, [topic.topic_id]);
+    // 详情由父组件预取并通过 props 提供
 
     return (
       <div ref={cardRef} className="border border-gray-200 shadow-none w-full max-w-full bg-white rounded-lg" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
@@ -1997,7 +2012,11 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                       <div className="topic-cards-container space-y-3 pr-4 max-w-full" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
                         {topics.map((topic) => (
                           <div key={topic.topic_id} style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
-                            <TopicCard topic={topic} searchTerm={searchTerm} />
+                            <TopicCard
+                              topic={topic}
+                              searchTerm={searchTerm}
+                              topicDetail={topicDetails.get(Number((topic as any).topic_id))}
+                            />
                           </div>
                         ))}
                       </div>

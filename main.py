@@ -2671,16 +2671,49 @@ async def update_crawl_settings(settings: dict):
 
 @app.get("/api/groups/{group_id}/info")
 async def get_group_info(group_id: str):
-    """获取群组信息"""
+    """获取群组信息（带本地回退，避免401/500导致前端报错）"""
     try:
         # 自动匹配该群组所属账号，获取对应Cookie
         cookie = get_cookie_for_group(group_id)
 
-        if not cookie:
-            raise HTTPException(status_code=400, detail="未找到可用Cookie，请先在账号管理或config.toml中配置")
+        # 本地回退数据构造（不访问官方API）
+        def build_fallback(source: str = "fallback", note: str = None) -> dict:
+            files_count = 0
+            try:
+                crawler = get_crawler_for_group(group_id)
+                downloader = crawler.get_file_downloader()
+                try:
+                    downloader.file_db.cursor.execute("SELECT COUNT(*) FROM files")
+                    row = downloader.file_db.cursor.fetchone()
+                    files_count = (row[0] or 0) if row else 0
+                except Exception:
+                    files_count = 0
+            except Exception:
+                files_count = 0
 
-        # 获取群组信息
-        import requests
+            try:
+                gid = int(group_id)
+            except Exception:
+                gid = group_id
+
+            result = {
+                "group_id": gid,
+                "name": f"群组 {group_id}",
+                "description": "",
+                "statistics": {"files": {"count": files_count}},
+                "background_url": None,
+                "account": am_get_account_summary_for_group(group_id),
+                "source": source,
+            }
+            if note:
+                result["note"] = note
+            return result
+
+        # 若没有可用 Cookie，直接返回本地回退，避免抛 400/500
+        if not cookie:
+            return build_fallback(note="no_cookie")
+
+        # 调用官方接口
         url = f"https://api.zsxq.com/v2/groups/{group_id}"
         headers = {
             'Cookie': cookie,
@@ -2688,6 +2721,7 @@ async def get_group_info(group_id: str):
         }
 
         response = requests.get(url, headers=headers, timeout=30)
+
         if response.status_code == 200:
             data = response.json()
             if data.get('succeeded'):
@@ -2698,15 +2732,21 @@ async def get_group_info(group_id: str):
                     "description": group_data.get('description'),
                     "statistics": group_data.get('statistics', {}),
                     "background_url": group_data.get('background_url'),
-                    "account": am_get_account_summary_for_group(group_id)
+                    "account": am_get_account_summary_for_group(group_id),
+                    "source": "remote"
                 }
-            else:
-                raise HTTPException(status_code=400, detail="获取群组信息失败")
+            # 官方返回非 succeeded，也走回退
+            return build_fallback(note="remote_response_failed")
         else:
-            raise HTTPException(status_code=response.status_code, detail="API请求失败")
+            # 授权失败/权限不足 → 使用本地回退（200返回，减少前端告警）
+            if response.status_code in (401, 403):
+                return build_fallback(note=f"remote_api_{response.status_code}")
+            # 其他状态码也回退
+            return build_fallback(note=f"remote_api_{response.status_code}")
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取群组信息失败: {str(e)}")
+    except Exception:
+        # 任何异常都回退为本地信息，避免 500
+        return build_fallback(note="exception_fallback")
 
 @app.get("/api/groups/{group_id}/topics")
 async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, search: Optional[str] = None):
