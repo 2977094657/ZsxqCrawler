@@ -6,9 +6,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Users, MessageSquare, Crown, UserCog, RefreshCw } from 'lucide-react';
+import { Users, MessageSquare, Crown, UserCog, RefreshCw, Trash2 } from 'lucide-react';
 import { apiClient, Group, GroupStats, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import SafeImage from './SafeImage';
 import '../styles/group-selector.css';
 
@@ -25,6 +26,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const [accountSelfMap, setAccountSelfMap] = useState<Record<number, AccountSelf | null>>({});
+  const [deletingGroups, setDeletingGroups] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     loadGroups();
@@ -128,6 +130,26 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(`刷新失败: ${msg}`);
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: number) => {
+    if (deletingGroups.has(groupId)) return;
+    setDeletingGroups((prev) => new Set(prev).add(groupId));
+    try {
+      const res = await apiClient.deleteGroup(groupId);
+      const msg = (res as any)?.message || '已删除';
+      toast.success(msg);
+      await loadGroups(0);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`删除失败: ${msg}`);
+    } finally {
+      setDeletingGroups((prev) => {
+        const s = new Set(prev);
+        s.delete(groupId);
+        return s;
+      });
     }
   };
 
@@ -359,14 +381,51 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                         </Badge>
                       )}
 
-                      {/* 来源标签 */}
-                      <div className="flex items-center gap-1">
-                        {group.source?.includes('account') && (
-                          <Badge variant="secondary" className="text-xs">账号</Badge>
-                        )}
-                        {group.source?.includes('local') && (
-                          <Badge variant="outline" className="text-xs">本地</Badge>
-                        )}
+                      {/* 来源标签 + 删除 */}
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1">
+                          {group.source?.includes('account') && (
+                            <Badge variant="secondary" className="text-xs">账号</Badge>
+                          )}
+                          {group.source?.includes('local') && (
+                            <Badge variant="outline" className="text-xs">本地</Badge>
+                          )}
+                        </div>
+
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); }}
+                              className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800"
+                              title="删除该社群的本地数据"
+                              disabled={deletingGroups.has(group.group_id)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              {deletingGroups.has(group.group_id) ? '删除中' : '删除'}
+                            </button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle className="text-red-600">确认删除该社群的本地数据</AlertDialogTitle>
+                              <AlertDialogDescription className="text-red-700">
+                                此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
+                              <AlertDialogAction
+                                className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteGroup(group.group_id);
+                                }}
+                              >
+                                确认删除
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </div>
                     </div>
 

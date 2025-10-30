@@ -607,6 +607,12 @@ class ApiClient {
       body: JSON.stringify(params || {}),
     });
   }
+  // 删除社群本地数据
+  async deleteGroup(groupId: number | string) {
+    return this.request(`/api/groups/${groupId}`, {
+      method: 'DELETE',
+    });
+  }
 }
 
 // 导出单例实例
