@@ -74,10 +74,10 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* 文件统计概览 */}
       {fileStats && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <Card className="border border-gray-200 shadow-none">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">文件总数</CardTitle>
@@ -125,7 +125,7 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
       )}
 
       {/* 功能操作面板 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* 下载文件 */}
         <Card className="border border-gray-200 shadow-none">
           <CardHeader>

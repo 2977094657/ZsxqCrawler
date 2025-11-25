@@ -97,7 +97,7 @@ export default function DataPanel({ selectedGroup }: DataPanelProps) {
   };
 
   return (
-    <Tabs defaultValue="topics" className="space-y-6">
+    <Tabs defaultValue="topics" className="space-y-4">
       <TabsList className="grid w-full grid-cols-2">
         <TabsTrigger value="topics">话题数据</TabsTrigger>
         <TabsTrigger value="files">文件数据</TabsTrigger>

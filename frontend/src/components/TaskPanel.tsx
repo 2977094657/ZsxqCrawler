@@ -98,7 +98,7 @@ export default function TaskPanel() {
   const getFailedTasks = () => tasks.filter(task => task.status === 'failed');
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* 任务统计概览 */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="border border-gray-200 shadow-none">

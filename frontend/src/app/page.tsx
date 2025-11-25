@@ -90,13 +90,13 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto p-6">
+      <div className="container mx-auto p-4">
         {/* 页面标题和群组信息 */}
-        <div className="mb-8">
+        <div className="mb-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-4xl font-bold mb-2">🌟 知识星球数据采集器</h1>
-              <p className="text-muted-foreground">
+              <h1 className="text-2xl font-bold mb-1">🌟 知识星球数据采集器</h1>
+              <p className="text-sm text-muted-foreground">
                 知识星球内容爬取与文件下载工具，支持话题采集、评论获取、文件批量下载等功能
               </p>
             </div>
@@ -113,18 +113,18 @@ export default function Home() {
 
           {/* 当前选中的群组信息 */}
           {selectedGroup && (
-            <Card className="mt-4">
-              <CardContent className="pt-4">
+            <Card className="mt-3">
+              <CardContent className="py-3">
                 <div className="flex items-center gap-4">
                   {selectedGroup.background_url && (
                     <img
                       src={selectedGroup.background_url}
                       alt={selectedGroup.name}
-                      className="w-16 h-16 rounded-lg object-cover"
+                      className="w-12 h-12 rounded-lg object-cover"
                     />
                   )}
                   <div className="flex-1">
-                    <h2 className="text-xl font-semibold">{selectedGroup.name}</h2>
+                    <h2 className="text-lg font-semibold">{selectedGroup.name}</h2>
                     <div className="flex items-center gap-2 mt-1">
                       <Badge variant="secondary">{selectedGroup.type}</Badge>
                       <Badge variant="outline">ID: {selectedGroup.group_id}</Badge>
@@ -138,13 +138,13 @@ export default function Home() {
                   {selectedGroup.statistics && (
                     <div className="flex gap-6 text-center">
                       <div>
-                        <div className="text-lg font-semibold">
+                        <div className="text-base font-semibold">
                           {selectedGroup.statistics.members_count || 0}
                         </div>
                         <div className="text-xs text-muted-foreground">成员</div>
                       </div>
                       <div>
-                        <div className="text-lg font-semibold">
+                        <div className="text-base font-semibold">
                           {selectedGroup.statistics.topics_count || 0}
                         </div>
                         <div className="text-xs text-muted-foreground">话题</div>
@@ -158,14 +158,14 @@ export default function Home() {
         </div>
 
         {/* 统计概览 */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">话题总数</CardTitle>
               <Badge variant="secondary">📝</Badge>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-semibold">
                 {stats?.topic_database.timestamp_info.total_topics || 0}
               </div>
               <p className="text-xs text-muted-foreground">
@@ -180,7 +180,7 @@ export default function Home() {
               <Badge variant="secondary">📁</Badge>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-semibold">
                 {stats?.file_database.stats.files || 0}
               </div>
               <p className="text-xs text-muted-foreground">
@@ -215,7 +215,7 @@ export default function Home() {
         </div>
 
         {/* 主要功能面板 */}
-        <Tabs defaultValue="crawl" className="space-y-6">
+        <Tabs defaultValue="crawl" className="space-y-3">
           <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="crawl">话题采集</TabsTrigger>
             <TabsTrigger value="files">文件管理</TabsTrigger>

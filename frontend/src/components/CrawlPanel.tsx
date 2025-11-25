@@ -191,7 +191,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* 爬取设置 */}
       <div className="flex justify-between items-center">
         <div>
@@ -209,7 +209,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {/* 获取最新话题 */}
       <Card className="border border-gray-200 shadow-none">
         <CardHeader>
