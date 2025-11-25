@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Users, MessageSquare, Crown, UserCog, RefreshCw, Trash2 } from 'lucide-react';
 import { apiClient, Group, GroupStats, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
@@ -187,14 +188,14 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   if (loading || isRetrying) {
     return (
       <div className="min-h-screen bg-background">
-        <div className="container mx-auto p-6">
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold mb-2">🌟 知识星球数据采集器</h1>
-            <p className="text-muted-foreground">
+        <div className="container mx-auto p-4">
+          <div className="mb-4">
+            <h1 className="text-2xl font-bold mb-1">🌟 知识星球数据采集器</h1>
+            <p className="text-sm text-muted-foreground">
               {isRetrying ? '正在重试获取群组列表...' : '正在加载您的知识星球群组...'}
             </p>
           </div>
-          <div className="flex items-center justify-center py-12">
+          <div className="flex items-center justify-center py-8">
             <div className="text-center">
               <Progress value={undefined} className="w-64 mb-4" />
               <p className="text-muted-foreground">
@@ -215,10 +216,10 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   if (error) {
     return (
       <div className="min-h-screen bg-background">
-        <div className="container mx-auto p-6">
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold mb-2">🌟 知识星球数据采集器</h1>
-            <p className="text-muted-foreground">
+        <div className="container mx-auto p-4">
+          <div className="mb-4">
+            <h1 className="text-2xl font-bold mb-1">🌟 知识星球数据采集器</h1>
+            <p className="text-sm text-muted-foreground">
               加载群组列表时出现错误
             </p>
           </div>
@@ -239,14 +240,21 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
     );
   }
 
+  // 按来源拆分群组：网络群组（账号）与本地群组
+  // 说明：凡是包含 account 的都视为“网络群组”；凡是包含 local 的都视为“本地群组”
+  // 这样 account|local 这类“既有账号又有本地数据”的群，会在两个 Tab 都展示，
+  // 满足你在网络和本地视角下都能看到完整信息的需求。
+  const accountGroups = groups.filter((g) => !g.source || g.source.includes('account'));
+  const localGroups = groups.filter((g) => g.source && g.source.includes('local'));
+
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto p-6">
-        <div className="mb-8">
+      <div className="container mx-auto p-4">
+        <div className="mb-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-4xl font-bold mb-2">🌟 知识星球数据采集器</h1>
-              <p className="text-muted-foreground">
+              <h1 className="text-2xl font-bold mb-1">🌟 知识星球数据采集器</h1>
+              <p className="text-sm text-muted-foreground">
                 选择要操作的知识星球群组
               </p>
             </div>
@@ -272,53 +280,61 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
         </div>
 
         {/* 群组统计 */}
-        <div className="mb-6">
+        <div className="mb-4 space-y-0.5">
           <p className="text-sm text-muted-foreground">
-            共 {groups.length} 个群组
+            共 {accountGroups.length} 个网络群组，{localGroups.length} 个本地群组
           </p>
         </div>
 
-        {/* 群组网格 */}
-        {groups.length === 0 ? (
-          <Card className="max-w-md mx-auto border border-gray-200 shadow-none">
-            <CardContent className="pt-6">
-              <div className="text-center">
-                <p className="text-muted-foreground">
-                  暂无可访问的群组
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {groups.map((group) => {
+        {/* 群组网格：通过标签区分账号群组与本地群组，禁止混在同一列表中 */}
+        <Tabs defaultValue="account" className="space-y-3">
+          <TabsList className="grid w-full grid-cols-2 h-9 text-sm">
+            <TabsTrigger value="account">网络群组（账号）</TabsTrigger>
+            <TabsTrigger value="local">本地群组</TabsTrigger>
+          </TabsList>
+
+          {/* 网络群组 */}
+          <TabsContent value="account">
+            {accountGroups.length === 0 ? (
+              <Card className="max-w-md mx-auto border border-gray-200 shadow-none">
+                <CardContent className="pt-6">
+                  <div className="text-center">
+                    <p className="text-muted-foreground">
+                      暂无可访问的网络群组，请先在账号管理中添加或更新 Cookie
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {accountGroups.map((group) => {
               const stats = groupStats[group.group_id];
               return (
                 <Card
                   key={group.group_id}
-                  className="cursor-pointer border border-gray-200 hover:border-gray-300 transition-all duration-200 shadow-none hover:shadow-sm"
+                  className="group-card w-[250px] cursor-pointer border border-gray-200 hover:border-gray-300 transition-all duration-200 shadow-none hover:shadow-sm"
                   onClick={() => router.push(`/groups/${group.group_id}`)}
                 >
-                  <CardContent className="p-4">
-                    {/* 群组头像/背景图 */}
-                    <div className="mb-4">
+                  <CardContent className="p-3">
+                    {/* 群组封面：固定 250x250，完整展示图片（容器最大宽度 250） */}
+                    <div className="mb-2 flex justify-center">
                       <SafeImage
                         src={group.background_url}
                         alt={group.name}
-                        className="w-full h-32 rounded-lg object-cover"
-                        fallbackClassName="w-full h-32 rounded-lg"
+                        className="w-[250px] h-[250px] rounded-lg object-contain"
+                        fallbackClassName="w-[250px] h-[250px] rounded-lg bg-muted"
                         fallbackText={group.name.slice(0, 2)}
                         fallbackGradient={getGradientByType(group.type)}
                       />
                     </div>
 
                     {/* 群组名称 */}
-                    <h3 className="text-lg font-semibold text-gray-900 line-clamp-2 mb-3 min-h-[3.5rem]">
+                    <h3 className="text-sm font-semibold text-gray-900 line-clamp-2 mb-1">
                       {group.name}
                     </h3>
 
                     {/* 统计信息 */}
-                    <div className="space-y-2 mb-4">
+                    <div className="space-y-1 mb-2">
                       <div className="flex items-center justify-between text-sm">
                         {/* 群主信息 */}
                         {group.owner && (
@@ -451,8 +467,165 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                 </Card>
               );
             })}
-          </div>
-        )}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* 本地群组 */}
+          <TabsContent value="local">
+            {localGroups.length === 0 ? (
+              <Card className="max-w-md mx-auto border border-gray-200 shadow-none">
+                <CardContent className="pt-6">
+                  <div className="text-center">
+                    <p className="text-muted-foreground">
+                      暂无本地群组，请先执行采集或从旧版本迁移数据
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {localGroups.map((group) => {
+                  const stats = groupStats[group.group_id];
+                  return (
+                    <Card
+                      key={group.group_id}
+                      className="group-card w-[250px] cursor-pointer border border-gray-200 hover:border-gray-300 transition-all duration-200 shadow-none hover:shadow-sm"
+                      onClick={() => router.push(`/groups/${group.group_id}`)}
+                    >
+                      <CardContent className="p-3">
+                        {/* 群组封面：固定 250x250，完整展示图片（容器最大宽度 250） */}
+                        <div className="mb-2 flex justify-center">
+                          <SafeImage
+                            src={group.background_url}
+                            alt={group.name}
+                            className="w-[250px] h-[250px] rounded-lg object-contain"
+                            fallbackClassName="w-[250px] h-[250px] rounded-lg bg-muted"
+                            fallbackText={group.name.slice(0, 2)}
+                            fallbackGradient={getGradientByType(group.type)}
+                          />
+                        </div>
+
+                        {/* 群组名称 */}
+                        <h3 className="text-sm font-semibold text-gray-900 line-clamp-2 mb-1">
+                          {group.name}
+                        </h3>
+
+                        {/* 统计信息 */}
+                        <div className="space-y-1 mb-2">
+                          <div className="flex items-center justify-between text-sm">
+                            {/* 群主信息 */}
+                            {group.owner && (
+                              <div className="flex items-center gap-1 text-gray-600">
+                                <Crown className="h-4 w-4" />
+                                <span className="truncate">{group.owner.name}</span>
+                              </div>
+                            )}
+
+                            {/* 话题数量 */}
+                            {stats && (
+                              <div className="flex items-center gap-1 text-gray-600">
+                                <MessageSquare className="h-4 w-4" />
+                                <span>{stats.topics_count || 0}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 所属账号标记（头像 + 名称） */}
+                          <div className="flex items-center gap-2 text-xs text-gray-600">
+                            {accountSelfMap[group.group_id]?.avatar_url ? (
+                              <img
+                                src={apiClient.getProxyImageUrl(accountSelfMap[group.group_id]!.avatar_url!)}
+                                alt={accountSelfMap[group.group_id]?.name || ''}
+                                className="w-5 h-5 rounded-full"
+                                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                              />
+                            ) : (
+                              <div className="w-5 h-5 rounded-full bg-gray-200" />
+                            )}
+                            <span className="truncate">
+                              {accountSelfMap[group.group_id]?.name ||
+                               (group.account?.name || group.account?.id) ||
+                               '默认账号'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 类型标识和状态 */}
+                        <div className="flex items-center justify-between">
+                          {/* 本地群组类型统一标记 */}
+                          <Badge variant="secondary" className="text-xs">
+                            本地
+                          </Badge>
+
+                          {/* 来源标签 + 删除 */}
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              {group.source?.includes('local') && (
+                                <Badge variant="outline" className="text-xs">本地</Badge>
+                              )}
+                            </div>
+
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); }}
+                                  className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800"
+                                  title="删除该社群的本地数据"
+                                  disabled={deletingGroups.has(group.group_id)}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                  {deletingGroups.has(group.group_id) ? '删除中' : '删除'}
+                                </button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle className="text-red-600">确认删除该社群的本地数据</AlertDialogTitle>
+                                  <AlertDialogDescription className="text-red-700">
+                                    此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteGroup(group.group_id);
+                                    }}
+                                  >
+                                    确认删除
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
+                        </div>
+
+                        {/* 时间信息 */}
+                        <div className="mt-2 pt-2 border-t border-gray-100">
+                          <div className="space-y-1 text-xs text-gray-500">
+                            {group.join_time && (
+                              <div>
+                                加入时间: {formatDate(group.join_time)}
+                              </div>
+                            )}
+                            {group.expiry_time && (
+                              <div>
+                                本地数据最新时间: {formatDate(group.expiry_time)}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
