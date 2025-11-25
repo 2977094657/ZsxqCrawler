@@ -1664,11 +1664,15 @@ def main():
     
     COOKIE = auth_config.get('cookie', 'your_cookie_here')
     GROUP_ID = auth_config.get('group_id', 'your_group_id_here')
-    DB_PATH = db_config.get('path', 'zsxq_interactive.db')
+    # 数据库路径改为可选；如未配置则由路径管理器自动管理
+    DB_PATH = db_config.get('path') if isinstance(db_config, dict) else None
     
     # 检查配置是否已修改
-    if COOKIE == "your_cookie_here" or GROUP_ID == "your_group_id_here":
-        print("⚠️ 请先在config.toml中配置您的cookie和group_id")
+    if COOKIE == "your_cookie_here" or not COOKIE:
+        print("⚠️ 请先在config.toml中配置您的 cookie")
+        return
+    if GROUP_ID == "your_group_id_here" or not GROUP_ID:
+        print("⚠️ 交互式命令行模式仍需手动指定单个群组ID，请在 config.toml 中添加 [auth].group_id")
         return
     
     # 创建交互式爬虫

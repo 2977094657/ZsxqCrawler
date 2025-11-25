@@ -47,3 +47,6 @@ cache
 /.history/
 /downloads/
 /output/
+
+# local config
+config.toml

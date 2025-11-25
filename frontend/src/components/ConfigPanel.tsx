@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -18,12 +17,11 @@ interface ConfigPanelProps {
 export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
   const [loading, setLoading] = useState(false);
   const [cookie, setCookie] = useState('');
-  const [groupId, setGroupId] = useState('');
   const [showInstructions, setShowInstructions] = useState(false);
 
   const handleSaveConfig = async () => {
-    if (!cookie.trim() || !groupId.trim()) {
-      toast.error('请填写完整的Cookie和群组ID');
+    if (!cookie.trim()) {
+      toast.error('请填写完整的 Cookie');
       return;
     }
 
@@ -31,8 +29,6 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
       setLoading(true);
       const response = await apiClient.updateConfig({
         cookie: cookie.trim(),
-        group_id: groupId.trim(),
-        db_path: 'zsxq_interactive.db'
       });
       
       toast.success('配置保存成功！');
@@ -44,27 +40,17 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
     }
   };
 
-  const extractGroupIdFromUrl = (url: string) => {
-    const match = url.match(/group\/(\d+)/);
-    if (match) {
-      setGroupId(match[1]);
-      toast.success('已自动提取群组ID');
-    } else {
-      toast.error('无法从URL中提取群组ID，请检查URL格式');
-    }
-  };
-
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto p-6">
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold mb-2">🌟 知识星球数据采集器</h1>
-          <p className="text-muted-foreground">
+      <div className="container mx-auto p-4">
+        <div className="mb-4">
+          <h1 className="text-2xl font-bold mb-1">🌟 知识星球数据采集器</h1>
+          <p className="text-sm text-muted-foreground">
             请配置您的知识星球认证信息以开始使用
           </p>
         </div>
 
-        <div className="max-w-2xl mx-auto space-y-6">
+        <div className="max-w-2xl mx-auto space-y-4">
           {/* 配置表单 */}
           <Card>
             <CardHeader>
@@ -73,7 +59,7 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
                 配置认证信息
               </CardTitle>
               <CardDescription>
-                填写您的知识星球Cookie和群组ID
+                填写您的知识星球 Cookie，后端会自动获取该账号下的全部星球
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -91,34 +77,10 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
                 </p>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="group-id">群组ID</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="group-id"
-                    placeholder="例如: 123456789"
-                    value={groupId}
-                    onChange={(e) => setGroupId(e.target.value)}
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      const url = prompt('请输入知识星球群组页面URL:');
-                      if (url) extractGroupIdFromUrl(url);
-                    }}
-                  >
-                    从URL提取
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  从知识星球群组页面URL中提取的数字ID
-                </p>
-              </div>
-
               <div className="flex gap-2">
                 <Button
                   onClick={handleSaveConfig}
-                  disabled={loading || !cookie.trim() || !groupId.trim()}
+                  disabled={loading || !cookie.trim()}
                   className="flex-1"
                 >
                   {loading ? '保存中...' : '保存配置'}
@@ -184,19 +146,7 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
                 </div>
               </div>
 
-              {/* 群组ID获取说明 */}
-              <div className="space-y-3">
-                <h3 className="text-lg font-semibold">2. 获取群组ID</h3>
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4 space-y-2">
-                  <ol className="list-decimal list-inside space-y-2 text-sm">
-                    <li>在知识星球中进入您要采集的目标群组</li>
-                    <li>查看浏览器地址栏的URL</li>
-                    <li>URL格式类似：<code className="bg-gray-100 px-1 rounded">https://wx.zsxq.com/group/123456789</code></li>
-                    <li>其中的数字部分 <code className="bg-gray-100 px-1 rounded">123456789</code> 就是群组ID</li>
-                    <li>或者点击上方的"从URL提取"按钮，粘贴完整URL自动提取</li>
-                  </ol>
-                </div>
-              </div>
+              {/* 不再需要在配置文件中填写群组ID，登录后将在前端选择具体星球 */}
 
               {/* 注意事项 */}
               <div className="space-y-3">
