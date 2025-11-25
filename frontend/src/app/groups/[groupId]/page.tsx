@@ -49,8 +49,9 @@ export default function GroupDetailPage() {
   const [isRetrying, setIsRetrying] = useState(false);
   const [selectedCrawlOption, setSelectedCrawlOption] = useState<'latest' | 'incremental' | 'all' | 'range' | null>('all');
   const [selectedDownloadOption, setSelectedDownloadOption] = useState<'time' | 'count' | null>('time');
-  const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set());
-  const [expandedContent, setExpandedContent] = useState<Set<number>>(new Set());
+  // 注意：topic_id 可能超过 JS 安全整数范围，这里统一按字符串处理 ID
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+  const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set());
   const [groupInfo, setGroupInfo] = useState<any>(null);
   const [localFileCount, setLocalFileCount] = useState<number>(0);
   const [tags, setTags] = useState<any[]>([]);
@@ -78,7 +79,8 @@ export default function GroupDetailPage() {
 
 
 
-  const [topicDetails, setTopicDetails] = useState<Map<number, any>>(new Map());
+  // 话题详情缓存：key 使用字符串形式的 topic_id，避免大整数精度问题
+  const [topicDetails, setTopicDetails] = useState<Map<string, any>>(new Map());
   const inFlightRef = useRef<Map<string, Promise<any>>>(new Map());
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
@@ -172,8 +174,9 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   useEffect(() => {
     if (!topics || topics.length === 0) return;
     topics.forEach((t: any) => {
-      const tid = Number(t?.topic_id);
-      if (!tid || Number.isNaN(tid)) return;
+      // 直接使用后端返回的 topic_id 字符串，避免 Number 精度丢失
+      const tid = String((t as any)?.topic_id || '');
+      if (!tid) return;
       if (topicDetails.has(tid)) return;
       const key = `${groupId}-${tid}`;
       if (inFlightRef.current.get(key)) return;
@@ -284,6 +287,23 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
        // 检查是否获取到有效数据
       if (!data || !data.data) {
         throw new Error('API返回空数据，可能是反爬虫机制');
+      }
+
+      // 🧪 调试输出：loadTopics 收到的数据
+      try {
+        const offerTopic = (data.data || []).find((t: any) =>
+          typeof t.title === 'string' && t.title.startsWith('Offer选择')
+        );
+        if (offerTopic) {
+          console.log('[GroupDetailPage.loadTopics] Offer topic from API client:', {
+            topic_id: (offerTopic as any).topic_id,
+            title: offerTopic.title,
+          });
+        } else {
+          console.log('[GroupDetailPage.loadTopics] Offer topic not found in API client data');
+        }
+      } catch (e) {
+        console.warn('[GroupDetailPage.loadTopics] debug Offer topic failed:', e);
       }
 
       setTopics(data.data);
@@ -2010,12 +2030,13 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                     {/* 使用ScrollArea组件实现美化的滚动条 */}
                     <ScrollArea ref={scrollAreaRef} className="flex-1 w-full">
                       <div className="topic-cards-container space-y-3 pr-4 max-w-full" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
-                        {topics.map((topic) => (
+                        {topics.map((topic: any) => (
                           <div key={topic.topic_id} style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
                             <TopicCard
                               topic={topic}
                               searchTerm={searchTerm}
-                              topicDetail={topicDetails.get(Number((topic as any).topic_id))}
+                              // 这里同样使用字符串形式的 topic_id 作为索引
+                              topicDetail={topicDetails.get(String((topic as any).topic_id || ''))}
                             />
                           </div>
                         ))}

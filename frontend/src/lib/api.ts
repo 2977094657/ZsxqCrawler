@@ -187,7 +187,7 @@ class ApiClient {
     return this.request('/api/config');
   }
 
-  async updateConfig(config: {cookie: string, group_id: string, db_path?: string}) {
+  async updateConfig(config: { cookie: string }) {
     return this.request('/api/config', {
       method: 'POST',
       body: JSON.stringify(config),
@@ -275,12 +275,15 @@ class ApiClient {
     });
   }
 
-  async getTopicDetail(topicId: number, groupId: number) {
-    return this.request(`/api/topics/${topicId}/${groupId}`);
+  async getTopicDetail(topicId: number | string, groupId: number) {
+    // 统一转为字符串，避免大整数在前端被 Number 处理后精度丢失
+    const id = String(topicId);
+    return this.request(`/api/topics/${id}/${groupId}`);
   }
 
-  async refreshTopic(topicId: number, groupId: number) {
-    return this.request(`/api/topics/${topicId}/${groupId}/refresh`, {
+  async refreshTopic(topicId: number | string, groupId: number) {
+    const id = String(topicId);
+    return this.request(`/api/topics/${id}/${groupId}/refresh`, {
       method: 'POST',
     });
   }
@@ -293,10 +296,11 @@ class ApiClient {
   }
 
   // 单个话题采集（测试特殊话题）
-  async fetchSingleTopic(groupId: number | string, topicId: number, fetchComments: boolean = false) {
+  async fetchSingleTopic(groupId: number | string, topicId: number | string, fetchComments: boolean = false) {
+    const id = String(topicId);
     const params = new URLSearchParams();
     if (fetchComments) params.append('fetch_comments', 'true');
-    const url = `/api/topics/fetch-single/${groupId}/${topicId}${params.toString() ? '?' + params.toString() : ''}`;
+    const url = `/api/topics/fetch-single/${groupId}/${id}${params.toString() ? '?' + params.toString() : ''}`;
     return this.request(url, { method: 'POST' });
   }
 
@@ -440,6 +444,9 @@ class ApiClient {
   }
 
   async getGroupTopics(groupId: number, page: number = 1, perPage: number = 20, search?: string): Promise<PaginatedResponse<Topic>> {
+    // 🧪 调试输出：请求参数
+    console.log('[apiClient.getGroupTopics] request params:', { groupId, page, perPage, search });
+
     const params = new URLSearchParams({
       page: page.toString(),
       per_page: perPage.toString(),
@@ -449,11 +456,43 @@ class ApiClient {
       params.append('search', search);
     }
 
-    const response = await this.request<{topics: Topic[], pagination: any}>(`/api/groups/${groupId}/topics?${params}`);
-    return {
+    const url = `/api/groups/${groupId}/topics?${params}`;
+    const response = await this.request<{topics: Topic[], pagination: any}>(url);
+
+    // 🧪 调试输出：原始返回中的 topic_id（前 10 条）
+    try {
+      const debugTopics = (response.topics || []).slice(0, 10).map((t: any) => ({
+        topic_id: t.topic_id,
+        title: t.title,
+      }));
+      console.log('[apiClient.getGroupTopics] raw response topics (first 10):', debugTopics);
+    } catch (e) {
+      console.warn('[apiClient.getGroupTopics] debug log failed:', e);
+    }
+
+    const result: PaginatedResponse<Topic> = {
       data: response.topics,
       pagination: response.pagination,
     };
+
+    // 🧪 调试输出：返回给调用方的数据结构
+    try {
+      const offerTopic = (result.data || []).find((t: any) =>
+        typeof t.title === 'string' && t.title.startsWith('Offer选择')
+      );
+      if (offerTopic) {
+        console.log('[apiClient.getGroupTopics] Offer topic in result:', {
+          topic_id: (offerTopic as any).topic_id,
+          title: offerTopic.title,
+        });
+      } else {
+        console.log('[apiClient.getGroupTopics] Offer topic not found in result');
+      }
+    } catch (e) {
+      console.warn('[apiClient.getGroupTopics] debug Offer topic failed:', e);
+    }
+
+    return result;
   }
 
   async getGroupStats(groupId: number): Promise<GroupStats> {

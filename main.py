@@ -27,6 +27,8 @@ if project_root not in sys.path:
 
 # 导入现有的业务逻辑模块
 from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config
+from zsxq_database import ZSXQDatabase
+from zsxq_file_database import ZSXQFileDatabase
 from db_path_manager import get_db_path_manager
 from image_cache_manager import get_image_cache_manager
 from accounts_manager import (
@@ -186,8 +188,6 @@ async def _init_local_groups_scan():
 # Pydantic模型定义
 class ConfigModel(BaseModel):
     cookie: str = Field(..., description="知识星球Cookie")
-    group_id: str = Field(..., description="群组ID")
-    db_path: str = Field(default="zsxq_interactive.db", description="数据库路径")
 
 class CrawlHistoricalRequest(BaseModel):
     pages: int = Field(default=10, ge=1, le=1000, description="爬取页数")
@@ -291,22 +291,40 @@ def get_crawler_safe() -> Optional[ZSXQInteractiveCrawler]:
     except HTTPException:
         return None
 
-def is_configured() -> bool:
-    """检查是否已配置认证信息"""
+def get_primary_cookie() -> Optional[str]:
+    """
+    获取当前优先使用的Cookie：
+    1. 若账号管理中存在默认账号，则优先使用默认账号的Cookie
+    2. 否则回退到 config.toml 中的 Cookie（若已配置）
+    """
+    # 1. 默认账号
+    try:
+        default_acc = am_get_default_account(mask_cookie=False)
+        if default_acc:
+            cookie = (default_acc.get("cookie") or "").strip()
+            if cookie:
+                return cookie
+    except Exception:
+        pass
+
+    # 2. config.toml 中的 Cookie
     try:
         config = load_config()
         if not config:
-            return False
+            return None
+        auth_config = config.get("auth", {}) or {}
+        cookie = (auth_config.get("cookie") or "").strip()
+        if cookie and cookie != "your_cookie_here":
+            return cookie
+    except Exception:
+        return None
 
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
-        group_id = auth_config.get('group_id', '')
+    return None
 
-        return (cookie != "your_cookie_here" and
-                group_id != "your_group_id_here" and
-                cookie and group_id)
-    except:
-        return False
+
+def is_configured() -> bool:
+    """检查是否已配置至少一个可用的认证Cookie（账号管理或config.toml 均可）"""
+    return get_primary_cookie() is not None
 
 def create_task(task_type: str, description: str) -> str:
     """创建新任务"""
@@ -445,28 +463,20 @@ async def get_config():
     """获取当前配置"""
     try:
         config = load_config()
-        if not config:
-            raise HTTPException(status_code=500, detail="配置文件不存在")
+        auth_config = (config or {}).get('auth', {}) if config else {}
+        cookie = auth_config.get('cookie', '') if auth_config else ''
 
-        auth_config = config.get('auth', {})
-        cookie = auth_config.get('cookie', '')
-        group_id = auth_config.get('group_id', '')
-
-        # 检查配置状态
         configured = is_configured()
 
-        # 隐藏敏感信息
-        safe_config = {
+        # 隐藏敏感信息，仅返回配置状态和下载相关配置
+        return {
             "configured": configured,
             "auth": {
-                "cookie": "***" if configured else "未配置",
-                "group_id": group_id if group_id != "your_group_id_here" else "未配置"
+                "cookie": "***" if cookie and cookie != "your_cookie_here" else "未配置",
             },
-            "database": config.get('database', {}),
-            "download": config.get('download', {})
+            "database": config.get('database', {}) if config else {},
+            "download": config.get('download', {}) if config else {}
         }
-
-        return safe_config
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
 
@@ -474,12 +484,6 @@ async def get_config():
 async def update_config(config: ConfigModel):
     """更新配置"""
     try:
-        # 使用路径管理器获取数据库路径
-        path_manager = get_db_path_manager()
-        topics_db_path = path_manager.get_topics_db_path(config.group_id)
-        from pathlib import Path
-        safe_topics_db_path = Path(topics_db_path).as_posix()
-
         # 创建配置内容
         config_content = f"""# 知识星球数据采集器配置文件
 # 通过Web界面自动生成
@@ -487,13 +491,6 @@ async def update_config(config: ConfigModel):
 [auth]
 # 知识星球登录Cookie
 cookie = "{config.cookie}"
-
-# 知识星球群组ID
-group_id = "{config.group_id}"
-
-[database]
-# 数据库文件路径（由路径管理器自动管理）
-path = "{safe_topics_db_path}"
 
 [download]
 # 下载目录
@@ -778,8 +775,8 @@ async def refresh_group_account_self(group_id: str):
 async def get_database_stats():
     """获取数据库统计信息"""
     try:
-        # 检查是否已配置
-        if not is_configured():
+        configured = is_configured()
+        if not configured:
             return {
                 "configured": False,
                 "topic_database": {
@@ -788,49 +785,102 @@ async def get_database_stats():
                         "total_topics": 0,
                         "oldest_timestamp": "",
                         "newest_timestamp": "",
-                        "has_data": False
-                    }
+                        "has_data": False,
+                    },
                 },
                 "file_database": {
-                    "stats": {}
-                }
+                    "stats": {},
+                },
             }
 
-        crawler = get_crawler_safe()
-        if not crawler:
+        # 聚合所有本地群组的数据库统计信息
+        path_manager = get_db_path_manager()
+        groups_info = path_manager.list_all_groups()
+
+        if not groups_info:
+            # 已配置但尚未产生本地数据
             return {
-                "configured": False,
+                "configured": True,
                 "topic_database": {
                     "stats": {},
                     "timestamp_info": {
                         "total_topics": 0,
                         "oldest_timestamp": "",
                         "newest_timestamp": "",
-                        "has_data": False
-                    }
+                        "has_data": False,
+                    },
                 },
                 "file_database": {
-                    "stats": {}
-                }
+                    "stats": {},
+                },
             }
 
-        # 获取话题数据库统计
-        topic_stats = crawler.db.get_database_stats()
-        timestamp_info = crawler.db.get_timestamp_range_info()
+        aggregated_topic_stats: Dict[str, int] = {}
+        aggregated_file_stats: Dict[str, int] = {}
 
-        # 获取文件数据库统计
-        file_downloader = crawler.get_file_downloader()
-        file_stats = file_downloader.file_db.get_database_stats()
+        oldest_ts: Optional[str] = None
+        newest_ts: Optional[str] = None
+        total_topics = 0
+        has_data = False
+
+        for gi in groups_info:
+            group_id = gi.get("group_id")
+            topics_db_path = gi.get("topics_db")
+            if not topics_db_path:
+                continue
+
+            # 话题数据库统计
+            db = ZSXQDatabase(topics_db_path)
+            try:
+                topic_stats = db.get_database_stats()
+                ts_info = db.get_timestamp_range_info()
+            finally:
+                db.close()
+
+            for table, count in (topic_stats or {}).items():
+                aggregated_topic_stats[table] = aggregated_topic_stats.get(table, 0) + int(count or 0)
+
+            if ts_info.get("has_data"):
+                has_data = True
+                ot = ts_info.get("oldest_timestamp")
+                nt = ts_info.get("newest_timestamp")
+                if ot:
+                    if oldest_ts is None or ot < oldest_ts:
+                        oldest_ts = ot
+                if nt:
+                    if newest_ts is None or nt > newest_ts:
+                        newest_ts = nt
+                total_topics += int(ts_info.get("total_topics") or 0)
+
+            # 文件数据库统计（如存在）
+            db_paths = path_manager.list_group_databases(str(group_id))
+            files_db_path = db_paths.get("files")
+            if files_db_path:
+                fdb = ZSXQFileDatabase(files_db_path)
+                try:
+                    file_stats = fdb.get_database_stats()
+                finally:
+                    fdb.close()
+
+                for table, count in (file_stats or {}).items():
+                    aggregated_file_stats[table] = aggregated_file_stats.get(table, 0) + int(count or 0)
+
+        timestamp_info = {
+            "total_topics": total_topics,
+            "oldest_timestamp": oldest_ts or "",
+            "newest_timestamp": newest_ts or "",
+            "has_data": has_data,
+        }
 
         return {
             "configured": True,
             "topic_database": {
-                "stats": topic_stats,
-                "timestamp_info": timestamp_info
+                "stats": aggregated_topic_stats,
+                "timestamp_info": timestamp_info,
             },
             "file_database": {
-                "stats": file_stats
-            }
+                "stats": aggregated_file_stats,
+            },
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取数据库统计失败: {str(e)}")
@@ -2192,6 +2242,42 @@ async def refresh_local_groups():
         # 不报错，返回降级结果
         return {"success": False, "count": len(cached), "groups": sorted(list(cached)), "error": str(e)}
 
+def _persist_group_meta_local(group_id: int, info: Dict[str, Any]):
+    """
+    将群组的封面、名称、群主与时间等元信息持久化到本地目录。
+    这样即使后续账号 Cookie 失效，仅保留本地数据时，也能展示完整信息。
+    """
+    try:
+        from pathlib import Path
+
+        path_manager = get_db_path_manager()
+        group_dir = path_manager.get_group_data_dir(str(group_id))
+        meta_path = Path(group_dir) / "group_meta.json"
+
+        meta = {
+            "group_id": group_id,
+            "name": info.get("name") or f"本地群（{group_id}）",
+            "type": info.get("type", ""),
+            "background_url": info.get("background_url", ""),
+            "owner": info.get("owner", {}) or {},
+            "statistics": info.get("statistics", {}) or {},
+            "create_time": info.get("create_time"),
+            "subscription_time": info.get("subscription_time"),
+            "expiry_time": info.get("expiry_time"),
+            "join_time": info.get("join_time"),
+            "last_active_time": info.get("last_active_time"),
+            "description": info.get("description", ""),
+            "is_trial": info.get("is_trial", False),
+            "trial_end_time": info.get("trial_end_time"),
+            "membership_end_time": info.get("membership_end_time"),
+        }
+
+        with meta_path.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ 写入本地群组元数据失败: {e}")
+
+
 @app.get("/api/groups")
 async def get_groups():
     """获取群组列表：账号群 ∪ 本地目录群（去重合并）"""
@@ -2200,15 +2286,12 @@ async def get_groups():
         group_account_map = build_account_group_detection()
         local_ids = get_cached_local_group_ids(force_refresh=False)
 
-        # 获取“当前账号”的群列表（若未配置则视为空集合）
+        # 获取“当前账号”的群列表（优先账号默认账号，其次config.toml；若未配置则视为空集合）
         groups_data: List[dict] = []
         try:
-            if is_configured():
-                config = load_config()
-                auth_config = config.get('auth', {}) if config else {}
-                cookie = auth_config.get('cookie', '') or ''
-                if cookie and cookie != "your_cookie_here":
-                    groups_data = fetch_groups_from_api(cookie)
+            primary_cookie = get_primary_cookie()
+            if primary_cookie:
+                groups_data = fetch_groups_from_api(primary_cookie)
         except Exception as e:
             # 不阻断，记录告警
             print(f"⚠️ 获取账号群失败，降级为本地集合: {e}")
@@ -2278,31 +2361,127 @@ async def get_groups():
             except Exception:
                 continue
             if gid_int in by_id:
-                # 标注来源为 account|local
+                # 标注来源为 account|local，并持久化一份元信息到本地
                 src = by_id[gid_int].get("source", "account")
                 if "local" not in src:
                     by_id[gid_int]["source"] = "account|local"
+                _persist_group_meta_local(gid_int, by_id[gid_int])
             else:
-                # 仅存在于本地
+                # 仅存在于本地：优先从 group_meta.json 读取元信息，其次从本地数据库补全
+                local_name = f"本地群（{gid_int}）"
+                local_type = "local"
+                local_bg = ""
+                owner: Dict[str, Any] = {}
+                join_time = None
+                expiry_time = None
+                last_active_time = None
+                description = ""
+                statistics: Dict[str, Any] = {}
+
+                # 1. 优先读取本地元数据文件（如果之前有账号+本地时已经落盘）
+                try:
+                    from pathlib import Path
+
+                    path_manager = get_db_path_manager()
+                    group_dir = path_manager.get_group_data_dir(str(gid_int))
+                    meta_path = Path(group_dir) / "group_meta.json"
+                    if meta_path.exists():
+                        with meta_path.open("r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                        local_name = meta.get("name", local_name)
+                        local_type = meta.get("type", local_type)
+                        local_bg = meta.get("background_url", local_bg)
+                        owner = meta.get("owner", {}) or owner
+                        statistics = meta.get("statistics", {}) or statistics
+                        join_time = meta.get("join_time", join_time)
+                        expiry_time = meta.get("expiry_time", expiry_time)
+                        last_active_time = meta.get("last_active_time", last_active_time)
+                        description = meta.get("description", description)
+                except Exception as e:
+                    print(f"⚠️ 读取本地群组 {gid_int} 元数据文件失败: {e}")
+
+                # 2. 若元数据文件中仍缺少信息，再从本地数据库补充
+                try:
+                    path_manager = get_db_path_manager()
+                    db_paths = path_manager.list_group_databases(str(gid_int))
+                    topics_db = db_paths.get("topics")
+                    if topics_db and os.path.exists(topics_db):
+                        db = ZSXQDatabase(topics_db)
+                        try:
+                            cur = db.cursor
+                            # 群组基础信息
+                            if not local_bg or local_name.startswith("本地群（"):
+                                cur.execute(
+                                    "SELECT name, type, background_url FROM groups WHERE group_id = ? LIMIT 1",
+                                    (gid_int,),
+                                )
+                                row = cur.fetchone()
+                                if row:
+                                    if row[0]:
+                                        local_name = row[0]
+                                    if row[1]:
+                                        local_type = row[1]
+                                    if row[2]:
+                                        local_bg = row[2]
+
+                            # 本地数据时间范围（以话题时间替代“加入/过期时间”的近似）
+                            if not join_time or not expiry_time:
+                                cur.execute(
+                                    """
+                                    SELECT MIN(create_time), MAX(create_time)
+                                    FROM topics
+                                    WHERE group_id = ? AND create_time IS NOT NULL AND create_time != ''
+                                    """,
+                                    (gid_int,),
+                                )
+                                trow = cur.fetchone()
+                                if trow:
+                                    if not join_time:
+                                        join_time = trow[0]
+                                    if not expiry_time:
+                                        expiry_time = trow[1]
+                                    if not last_active_time:
+                                        last_active_time = trow[1]
+
+                            # 简单统计：话题数量
+                            if not statistics:
+                                cur.execute(
+                                    "SELECT COUNT(*) FROM topics WHERE group_id = ?",
+                                    (gid_int,),
+                                )
+                                topics_count = cur.fetchone()[0] or 0
+                                statistics = {
+                                    "topics": {
+                                        "topics_count": topics_count,
+                                        "answers_count": 0,
+                                        "digests_count": 0,
+                                    }
+                                }
+                        finally:
+                            db.close()
+                except Exception as e:
+                    # 出错时降级为占位信息，不中断整个接口
+                    print(f"⚠️ 读取本地群组 {gid_int} 元数据失败: {e}")
+
                 by_id[gid_int] = {
                     "group_id": gid_int,
-                    "name": "本地群（未绑定账号）",
-                    "type": "local",
-                    "background_url": "",
-                    "owner": {},
-                    "statistics": {},
+                    "name": local_name,
+                    "type": local_type,
+                    "background_url": local_bg,
+                    "owner": owner,
+                    "statistics": statistics,
                     "status": None,
-                    "create_time": None,
+                    "create_time": join_time,
                     "subscription_time": None,
-                    "expiry_time": None,
-                    "join_time": None,
-                    "last_active_time": None,
-                    "description": "",
+                    "expiry_time": expiry_time,
+                    "join_time": join_time,
+                    "last_active_time": last_active_time,
+                    "description": description,
                     "is_trial": False,
                     "trial_end_time": None,
                     "membership_end_time": None,
                     "account": None,
-                    "source": "local"
+                    "source": "local",
                 }
 
         # 排序：按群ID升序；如需二级排序再按来源（账号优先）
@@ -2317,16 +2496,28 @@ async def get_groups():
 
 @app.get("/api/topics/{topic_id}/{group_id}")
 async def get_topic_detail(topic_id: int, group_id: str):
-    """获取话题详情"""
+    """获取话题详情（仅从本地数据库读取，不主动爬取）
+
+    注意：
+    - 如果本地 topics 表中不存在该 topic_id，会返回 404；
+    - 不会调用知识星球官方 API 拉取最新数据，如需补采请调用
+      POST /api/topics/fetch-single/{group_id}/{topic_id}。
+    """
     try:
         crawler = get_crawler_for_group(group_id)
         topic_detail = crawler.db.get_topic_detail(topic_id)
 
         if not topic_detail:
+            # 业务上这是一个“正常”的不存在场景，直接向外抛 404，
+            # 避免被下面的通用异常包装成 500。
             raise HTTPException(status_code=404, detail="话题不存在")
 
         return topic_detail
+    except HTTPException:
+        # 保留原有的状态码（例如上面的 404）
+        raise
     except Exception as e:
+        # 只有真正的非 HTTPException 异常才包装为 500
         raise HTTPException(status_code=500, detail=f"获取话题详情失败: {str(e)}")
 
 @app.post("/api/topics/{topic_id}/{group_id}/refresh")
@@ -2374,13 +2565,14 @@ async def refresh_topic(topic_id: int, group_id: str):
 
 @app.post("/api/topics/{topic_id}/{group_id}/fetch-comments")
 async def fetch_more_comments(topic_id: int, group_id: str):
-    """手动获取话题的更多评论"""
+    """手动获取话题的更多评论（在已存在本地话题记录的前提下）"""
     try:
         crawler = get_crawler_for_group(group_id)
 
-        # 先获取话题基本信息
+        # 先获取话题基本信息（仅查本地）
         topic_detail = crawler.db.get_topic_detail(topic_id)
         if not topic_detail:
+            # 同样这属于业务层面的“话题未采集”，直接返回 404
             raise HTTPException(status_code=404, detail="话题不存在")
 
         comments_count = topic_detail.get('comments_count', 0)
@@ -2416,6 +2608,9 @@ async def fetch_more_comments(topic_id: int, group_id: str):
                 "comments_fetched": 0
             }
 
+    except HTTPException:
+        # 保留显式抛出的业务错误（例如 404）
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取更多评论失败: {str(e)}")
 
@@ -2755,6 +2950,13 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
         # 使用指定群组的爬虫实例
         crawler = get_crawler_for_group(str(group_id))
 
+        # 🧪 调试：打印当前使用的数据库路径
+        try:
+            db_path = getattr(getattr(crawler, "db", None), "db_path", None)
+            print(f"[DEBUG get_group_topics] group_id={group_id}, db_path={db_path}, page={page}, per_page={per_page}")
+        except Exception as e:
+            print(f"[DEBUG get_group_topics] failed to print db_path: {e}")
+
         offset = (page - 1) * per_page
 
         # 构建查询SQL - 包含所有内容类型
@@ -2800,6 +3002,20 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
         crawler.db.cursor.execute(query, params)
         topics = crawler.db.cursor.fetchall()
 
+        # 🧪 调试：打印前若干条话题的 topic_id 和标题
+        try:
+            debug_rows = topics[:10]
+            debug_list = [(row[0], row[1]) for row in debug_rows]
+            print(f"[DEBUG get_group_topics] first topics from DB (topic_id, title): {debug_list}")
+
+            # 特别打印“Offer选择”这条（如果存在）
+            for row in debug_rows:
+                title = row[1] or ""
+                if isinstance(title, str) and title.startswith("Offer选择"):
+                    print(f"[DEBUG get_group_topics] Offer topic row from DB: topic_id={row[0]}, title={title}")
+        except Exception as e:
+            print(f"[DEBUG get_group_topics] failed to debug topics: {e}")
+
         # 获取总数
         if search:
             crawler.db.cursor.execute("SELECT COUNT(*) FROM topics WHERE group_id = ? AND title LIKE ?", (group_id, f"%{search}%"))
@@ -2810,8 +3026,11 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
         # 处理话题数据
         topics_list = []
         for topic in topics:
+            # 注意：topic_id 可能超过 JavaScript 的安全整数范围（2^53-1），
+            # 如果以数字形式传递到前端会发生精度丢失（例如 82811852151825212 变成 82811852151825220）。
+            # 因此这里统一将 topic_id 序列化为字符串，前端也应按字符串处理。
             topic_data = {
-                "topic_id": topic[0],
+                "topic_id": str(topic[0]) if topic[0] is not None else None,
                 "title": topic[1],
                 "create_time": topic[2],
                 "likes_count": topic[3],
