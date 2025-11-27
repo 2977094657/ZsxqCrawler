@@ -34,6 +34,11 @@
   <p><em>日志页面 - 实时任务执行日志</em></p>
 </div>
 
+<div align="center">
+  <img src="images/column.png" alt="专栏文章页面" height="400">
+  <p><em>专栏文章页面 - 专栏目录浏览、文章内容展示与视频下载</em></p>
+</div>
+
 ## 快速开始
 
 ### 1. 安装部署
@@ -80,7 +85,7 @@ npm run dev
 
 然后访问：
 - **Web 界面**: http://localhost:3060
-- **API 文档**: http://localhost:8000/docs
+- **API 文档**: http://localhost:8208/docs
 
 #### 方式二：命令行工具
 
