@@ -55,6 +55,11 @@ class DatabasePathManager:
         group_dir = self.get_group_dir(group_id)
         return os.path.join(group_dir, f"zsxq_files_{group_id}.db")
     
+    def get_columns_db_path(self, group_id: str) -> str:
+        """获取专栏数据库路径"""
+        group_dir = self.get_group_dir(group_id)
+        return os.path.join(group_dir, f"zsxq_columns_{group_id}.db")
+    
     def get_config_db_path(self) -> str:
         """获取配置数据库路径（全局配置，不按群组分）"""
         return os.path.join(self.base_dir, "zsxq_config.db")

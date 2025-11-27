@@ -2,7 +2,7 @@
  * API客户端 - 与后端FastAPI服务通信
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = 'http://localhost:8208';
 
 // 类型定义
 export interface ApiResponse<T = any> {
@@ -314,6 +314,18 @@ class ApiClient {
     return `${API_BASE_URL}/api/proxy-image?${params.toString()}`;
   }
 
+  // 获取本地缓存图片URL
+  getLocalImageUrl(groupId: string, localPath: string): string {
+    if (!localPath) return '';
+    return `${API_BASE_URL}/api/groups/${groupId}/images/${encodeURIComponent(localPath)}`;
+  }
+
+  // 获取本地缓存视频URL
+  getLocalVideoUrl(groupId: string, videoFilename: string): string {
+    if (!videoFilename) return '';
+    return `${API_BASE_URL}/api/groups/${groupId}/videos/${encodeURIComponent(videoFilename)}`;
+  }
+
   // 图片缓存管理
   async getImageCacheInfo(groupId: string) {
     return this.request(`/api/cache/images/info/${groupId}`);
@@ -499,6 +511,15 @@ class ApiClient {
     return this.request(`/api/groups/${groupId}/stats`);
   }
 
+  // 获取群组专栏摘要信息
+  async getGroupColumnsSummary(groupId: number): Promise<{
+    has_columns: boolean;
+    title: string | null;
+    error?: string;
+  }> {
+    return this.request(`/api/groups/${groupId}/columns/summary`);
+  }
+
   async getGroupTags(groupId: number) {
     return this.request(`/api/groups/${groupId}/tags`);
   }
@@ -652,6 +673,207 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
+  // =========================
+  // 专栏相关 API
+  // =========================
+
+  // 获取群组专栏目录列表
+  async getGroupColumns(groupId: number | string): Promise<{
+    columns: ColumnInfo[];
+    stats: ColumnsStats;
+  }> {
+    return this.request(`/api/groups/${groupId}/columns`);
+  }
+
+  // 获取专栏下的文章列表
+  async getColumnTopics(groupId: number | string, columnId: number): Promise<{
+    column: ColumnInfo;
+    topics: ColumnTopic[];
+  }> {
+    return this.request(`/api/groups/${groupId}/columns/${columnId}/topics`);
+  }
+
+  // 获取专栏文章详情
+  async getColumnTopicDetail(groupId: number | string, topicId: number): Promise<ColumnTopicDetail> {
+    return this.request(`/api/groups/${groupId}/columns/topics/${topicId}`);
+  }
+
+  // 采集群组所有专栏内容
+  async fetchGroupColumns(groupId: number | string, settings?: ColumnsFetchSettings): Promise<{
+    success: boolean;
+    task_id: string;
+    message: string;
+  }> {
+    return this.request(`/api/groups/${groupId}/columns/fetch`, {
+      method: 'POST',
+      body: JSON.stringify(settings || {}),
+    });
+  }
+
+  // 获取专栏统计信息
+  async getColumnsStats(groupId: number | string): Promise<ColumnsStats> {
+    return this.request(`/api/groups/${groupId}/columns/stats`);
+  }
+
+  // 删除群组所有专栏数据
+  async deleteAllColumns(groupId: number | string): Promise<{
+    success: boolean;
+    message: string;
+    deleted: {
+      columns_deleted: number;
+      topics_deleted: number;
+      details_deleted: number;
+      images_deleted: number;
+      files_deleted: number;
+      videos_deleted: number;
+      comments_deleted: number;
+    };
+  }> {
+    return this.request(`/api/groups/${groupId}/columns/all`, {
+      method: 'DELETE',
+    });
+  }
+}
+
+// 专栏相关类型定义
+export interface ColumnInfo {
+  column_id: number;
+  group_id: number;
+  name: string;
+  cover_url?: string;
+  topics_count: number;
+  create_time?: string;
+  last_topic_attach_time?: string;
+  imported_at?: string;
+}
+
+export interface ColumnTopic {
+  topic_id: number;
+  column_id: number;
+  group_id: number;
+  title?: string;
+  text?: string;
+  create_time?: string;
+  attached_to_column_time?: string;
+  imported_at?: string;
+  has_detail?: boolean;
+}
+
+export interface ColumnTopicDetail {
+  topic_id: number;
+  group_id: number;
+  type?: string;
+  title?: string;
+  full_text?: string;
+  likes_count: number;
+  comments_count: number;
+  readers_count: number;
+  digested: boolean;
+  sticky: boolean;
+  create_time?: string;
+  modify_time?: string;
+  raw_json?: string;
+  imported_at?: string;
+  updated_at?: string;
+  owner?: {
+    user_id: number;
+    name: string;
+    alias?: string;
+    avatar_url?: string;
+    description?: string;
+    location?: string;
+  };
+  images: ColumnImage[];
+  files: ColumnFile[];
+  videos: ColumnVideo[];
+  comments: ColumnComment[];
+}
+
+export interface ColumnImage {
+  image_id: number;
+  type?: string;
+  thumbnail?: { url?: string; width?: number; height?: number };
+  large?: { url?: string; width?: number; height?: number };
+  original?: { url?: string; width?: number; height?: number; size?: number };
+  local_path?: string;
+}
+
+export interface ColumnVideo {
+  video_id: number;
+  size?: number;
+  duration?: number;
+  cover?: {
+    url?: string;
+    width?: number;
+    height?: number;
+    local_path?: string;
+  };
+  video_url?: string;
+  download_status?: string;
+  local_path?: string;
+  download_time?: string;
+}
+
+export interface ColumnFile {
+  file_id: number;
+  name: string;
+  hash?: string;
+  size?: number;
+  duration?: number;
+  download_count?: number;
+  create_time?: string;
+  download_status?: string;
+  local_path?: string;
+  download_time?: string;
+}
+
+export interface ColumnComment {
+  comment_id: number;
+  parent_comment_id?: number;
+  text?: string;
+  create_time?: string;
+  likes_count: number;
+  rewards_count: number;
+  replies_count: number;
+  sticky: boolean;
+  owner?: {
+    user_id: number;
+    name: string;
+    alias?: string;
+    avatar_url?: string;
+    location?: string;
+  };
+  repliee?: {
+    user_id: number;
+    name: string;
+    alias?: string;
+    avatar_url?: string;
+  };
+}
+
+export interface ColumnsStats {
+  columns_count: number;
+  topics_count: number;
+  details_count: number;
+  images_count: number;
+  files_count: number;
+  files_downloaded: number;
+  videos_count: number;
+  videos_downloaded: number;
+  comments_count: number;
+}
+
+export interface ColumnsFetchSettings {
+  crawlIntervalMin?: number;
+  crawlIntervalMax?: number;
+  longSleepIntervalMin?: number;
+  longSleepIntervalMax?: number;
+  itemsPerBatch?: number;
+  downloadFiles?: boolean;
+  downloadVideos?: boolean;
+  cacheImages?: boolean;
+  incrementalMode?: boolean;
 }
 
 // 导出单例实例

@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, X, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, X, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw, BookOpen } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { apiClient, Group, GroupStats, Topic, FileStatus, Account, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
@@ -73,6 +73,10 @@ export default function GroupDetailPage() {
   const [accountSelf, setAccountSelf] = useState<AccountSelf | null>(null);
   const [loadingAccountSelf, setLoadingAccountSelf] = useState<boolean>(false);
   const [refreshingAccountSelf, setRefreshingAccountSelf] = useState<boolean>(false);
+
+  // 专栏相关
+  const [hasColumns, setHasColumns] = useState<boolean>(false);
+  const [columnsTitle, setColumnsTitle] = useState<string | null>(null);
 
 
 
@@ -164,6 +168,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     loadGroupAccount();
     loadAccounts();
     loadGroupAccountSelf();
+    loadColumnsSummary();
   }, [groupId]);
 
   useEffect(() => {
@@ -843,6 +848,19 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
       setCacheInfo(info);
     } catch (error) {
       console.error('加载缓存信息失败:', error);
+    }
+  };
+
+  // 加载专栏摘要信息
+  const loadColumnsSummary = async () => {
+    try {
+      const summary = await apiClient.getGroupColumnsSummary(groupId);
+      setHasColumns(summary.has_columns);
+      setColumnsTitle(summary.title);
+    } catch (error) {
+      console.error('加载专栏信息失败:', error);
+      setHasColumns(false);
+      setColumnsTitle(null);
     }
   };
 
@@ -1714,11 +1732,11 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
           <div className="mb-6">
             <Button
               variant="ghost"
-              onClick={() => router.back()}
+              onClick={() => router.push('/')}
               className="flex items-center gap-2"
             >
               <ArrowLeft className="h-4 w-4" />
-              返回
+              返回群组列表
             </Button>
           </div>
 
@@ -1742,11 +1760,11 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
           <div className="mb-6">
             <Button
               variant="ghost"
-              onClick={() => router.back()}
+              onClick={() => router.push('/')}
               className="flex items-center gap-2"
             >
               <ArrowLeft className="h-4 w-4" />
-              返回
+              返回群组列表
             </Button>
           </div>
 
@@ -1768,7 +1786,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
         <div className="flex items-center gap-4">
           <Button
             variant="ghost"
-            onClick={() => router.back()}
+            onClick={() => router.push('/')}
             className="flex items-center gap-2"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1776,6 +1794,18 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
           </Button>
 
           <div className="flex items-center gap-4 flex-1 justify-center max-w-2xl mx-auto">
+            {/* 专栏入口按钮 - 仅在有专栏时显示 */}
+            {hasColumns && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-2 whitespace-nowrap bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200 hover:border-amber-300 hover:from-amber-100 hover:to-orange-100 text-amber-700"
+                onClick={() => router.push(`/groups/${groupId}/columns`)}
+              >
+                <BookOpen className="h-4 w-4" />
+                {columnsTitle || '专栏'}
+              </Button>
+            )}
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
               <Input
