@@ -104,6 +104,7 @@ class ZSXQColumnsDatabase:
             CREATE TABLE IF NOT EXISTS images (
                 image_id INTEGER PRIMARY KEY,
                 topic_id INTEGER NOT NULL,
+                comment_id INTEGER,
                 type TEXT,
                 thumbnail_url TEXT,
                 thumbnail_width INTEGER,
@@ -117,7 +118,8 @@ class ZSXQColumnsDatabase:
                 original_size INTEGER,
                 local_path TEXT,
                 imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (topic_id) REFERENCES topic_details (topic_id)
+                FOREIGN KEY (topic_id) REFERENCES topic_details (topic_id),
+                FOREIGN KEY (comment_id) REFERENCES comments (comment_id)
             )
         ''')
         
@@ -205,7 +207,16 @@ class ZSXQColumnsDatabase:
         self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_topic_id ON files (topic_id)')
         self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_topic_id ON comments (topic_id)')
         self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_videos_topic_id ON videos (topic_id)')
-        
+
+        # 迁移：为 images 表添加 comment_id 列（如果不存在）
+        self.cursor.execute("PRAGMA table_info(images)")
+        columns = [row[1] for row in self.cursor.fetchall()]
+        if 'comment_id' not in columns:
+            self.cursor.execute('ALTER TABLE images ADD COLUMN comment_id INTEGER')
+
+        # 为 comment_id 创建索引（新表和迁移后的旧表都需要）
+        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_comment_id ON images (comment_id)')
+
         self.conn.commit()
         print(f"✅ 专栏数据库初始化完成: {self.db_path}")
     
@@ -524,7 +535,30 @@ class ZSXQColumnsDatabase:
             comment_data.get('replies_count', 0),
             comment_data.get('sticky', False)
         ))
-    
+
+    def import_comments(self, topic_id: int, comments: List[Dict[str, Any]]):
+        """导入评论列表（包括嵌套回复），用于持久化从API获取的完整评论"""
+        if not comments:
+            return 0
+
+        count = 0
+        for comment in comments:
+            # 插入主评论
+            self._insert_comment(topic_id, comment)
+            count += 1
+
+            # 插入嵌套的回复评论
+            replied_comments = comment.get('replied_comments', [])
+            for reply in replied_comments:
+                # 确保子评论有正确的 parent_comment_id
+                if not reply.get('parent_comment_id'):
+                    reply['parent_comment_id'] = comment.get('comment_id')
+                self._insert_comment(topic_id, reply)
+                count += 1
+
+        self.conn.commit()
+        return count
+
     def get_topic_detail(self, topic_id: int) -> Optional[Dict[str, Any]]:
         """获取文章详情"""
         self.cursor.execute('''
@@ -732,7 +766,7 @@ class ZSXQColumnsDatabase:
         return videos
     
     def get_topic_comments(self, topic_id: int) -> List[Dict[str, Any]]:
-        """获取文章的所有评论"""
+        """获取文章的所有评论（支持嵌套结构）"""
         self.cursor.execute('''
             SELECT c.comment_id, c.parent_comment_id, c.text, c.create_time,
                    c.likes_count, c.rewards_count, c.replies_count, c.sticky,
@@ -744,12 +778,19 @@ class ZSXQColumnsDatabase:
             WHERE c.topic_id = ?
             ORDER BY c.create_time ASC
         ''', (topic_id,))
-        
-        comments = []
+
+        # 先收集所有评论，然后构建嵌套结构
+        all_comments = {}  # comment_id -> comment_data
+        parent_comments = []  # 顶级评论
+        child_comments = []   # 子评论（有parent_comment_id的）
+
         for row in self.cursor.fetchall():
+            comment_id = row[0]
+            parent_comment_id = row[1]
+
             comment = {
-                'comment_id': row[0],
-                'parent_comment_id': row[1],
+                'comment_id': comment_id,
+                'parent_comment_id': parent_comment_id,
                 'text': row[2],
                 'create_time': row[3],
                 'likes_count': row[4],
@@ -759,7 +800,7 @@ class ZSXQColumnsDatabase:
                 'owner': None,
                 'repliee': None
             }
-            
+
             if row[8]:
                 comment['owner'] = {
                     'user_id': row[8],
@@ -768,7 +809,7 @@ class ZSXQColumnsDatabase:
                     'avatar_url': row[11],
                     'location': row[12]
                 }
-            
+
             if row[13]:
                 comment['repliee'] = {
                     'user_id': row[13],
@@ -776,9 +817,57 @@ class ZSXQColumnsDatabase:
                     'alias': row[15],
                     'avatar_url': row[16]
                 }
-            
-            comments.append(comment)
-        return comments
+
+            # 获取评论图片
+            self.cursor.execute('''
+                SELECT image_id, type, thumbnail_url, thumbnail_width, thumbnail_height,
+                       large_url, large_width, large_height, original_url, original_width,
+                       original_height, original_size
+                FROM images WHERE comment_id = ?
+            ''', (comment_id,))
+
+            images = []
+            for img_row in self.cursor.fetchall():
+                images.append({
+                    'image_id': img_row[0],
+                    'type': img_row[1],
+                    'thumbnail': {
+                        'url': img_row[2],
+                        'width': img_row[3],
+                        'height': img_row[4]
+                    },
+                    'large': {
+                        'url': img_row[5],
+                        'width': img_row[6],
+                        'height': img_row[7]
+                    },
+                    'original': {
+                        'url': img_row[8],
+                        'width': img_row[9],
+                        'height': img_row[10],
+                        'size': img_row[11]
+                    }
+                })
+            if images:
+                comment['images'] = images
+
+            # 存储评论并分类
+            all_comments[comment_id] = comment
+            if parent_comment_id:
+                child_comments.append(comment)
+            else:
+                parent_comments.append(comment)
+
+        # 构建嵌套结构：将子评论附加到父评论的 replied_comments 中
+        for child in child_comments:
+            parent_id = child.get("parent_comment_id")
+            if parent_id and parent_id in all_comments:
+                parent = all_comments[parent_id]
+                if "replied_comments" not in parent:
+                    parent["replied_comments"] = []
+                parent["replied_comments"].append(child)
+
+        return parent_comments
     
     # ==================== 文件下载状态 ====================
     

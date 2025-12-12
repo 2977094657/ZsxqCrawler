@@ -1634,6 +1634,59 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                           />
                         </div>
                       )}
+
+                      {/* 嵌套回复评论（二级评论） */}
+                      {comment.replied_comments && comment.replied_comments.length > 0 && (
+                        <div className="ml-6 mt-2 space-y-2 border-l-2 border-gray-200 pl-3">
+                          {comment.replied_comments.map((reply: any) => (
+                            <div key={reply.comment_id} className="bg-white rounded p-2">
+                              <div className="flex items-center gap-2 mb-1">
+                                {reply.owner && (
+                                  <img
+                                    src={apiClient.getProxyImageUrl(reply.owner.avatar_url || '', groupId.toString())}
+                                    alt={reply.owner.name}
+                                    loading="lazy"
+                                    decoding="async"
+                                    className="w-3 h-3 rounded-full object-cover block"
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                    }}
+                                  />
+                                )}
+                                <span className="text-xs font-medium text-gray-600">
+                                  {reply.owner?.name || '未知用户'}
+                                </span>
+                                {reply.repliee && (
+                                  <>
+                                    <span className="text-xs text-gray-400">回复</span>
+                                    <span className="text-xs font-medium text-blue-500">
+                                      {reply.repliee.name}
+                                    </span>
+                                  </>
+                                )}
+                                <span className="text-xs text-gray-400">
+                                  {formatDateTime(reply.create_time)}
+                                </span>
+                              </div>
+                              <div
+                                className="text-xs text-gray-500 ml-5 break-words prose prose-xs max-w-none prose-a:text-blue-600"
+                                dangerouslySetInnerHTML={createSafeHtmlWithHighlight(reply.text || '', searchTerm)}
+                              />
+                              {/* 嵌套回复图片 */}
+                              {reply.images && reply.images.length > 0 && (
+                                <div className="ml-5 mt-1">
+                                  <ImageGallery
+                                    images={reply.images}
+                                    className="reply-images"
+                                    size="small"
+                                    groupId={groupId.toString()}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

@@ -17,6 +17,7 @@ import {
 import { apiClient, ColumnInfo, ColumnTopic, ColumnTopicDetail, ColumnsStats, ColumnsFetchSettings } from '@/lib/api';
 import { toast } from 'sonner';
 import SafeImage from '@/components/SafeImage';
+import ImageGallery from '@/components/ImageGallery';
 import TaskLogViewer from '@/components/TaskLogViewer';
 import { createSafeHtml } from '@/lib/zsxq-content-renderer';
 
@@ -36,6 +37,7 @@ export default function ColumnsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [fetchingColumns, setFetchingColumns] = useState(false);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [loadingComments, setLoadingComments] = useState(false);
 
   // 采集设置
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
@@ -147,6 +149,29 @@ export default function ColumnsPage() {
       toast.error('加载文章详情失败');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  // 获取完整评论
+  const handleFetchMoreComments = async () => {
+    if (!selectedTopic) return;
+
+    try {
+      setLoadingComments(true);
+      const result = await apiClient.getColumnTopicFullComments(groupId, selectedTopic.topic_id);
+      if (result.success && result.comments) {
+        // 更新当前选中文章的评论
+        setSelectedTopic(prev => prev ? {
+          ...prev,
+          comments: result.comments
+        } : null);
+        toast.success(`已获取 ${result.total} 条评论`);
+      }
+    } catch (error) {
+      console.error('获取完整评论失败:', error);
+      toast.error('获取完整评论失败');
+    } finally {
+      setLoadingComments(false);
     }
   };
 
@@ -425,8 +450,63 @@ export default function ColumnsPage() {
             </div>
           </div>
 
-          {/* 正文内容 */}
-          {selectedTopic.full_text && (
+          {/* Q&A 类型内容 - 与普通话题样式一致 */}
+          {selectedTopic.type === 'q&a' && selectedTopic.question && (
+            <div className="mb-6 space-y-4">
+              {/* 提问部分 */}
+              <div className="w-full max-w-full overflow-hidden">
+                {/* 提问者信息 */}
+                <div className="text-sm text-gray-600 mb-2">
+                  <span className="font-medium">
+                    {selectedTopic.question.owner?.name || '用户'} 提问：
+                  </span>
+                </div>
+
+                {/* 问题内容 - 使用引用样式 */}
+                <div className="bg-gray-50 border-l-4 border-gray-300 pl-4 py-3 rounded-r-lg w-full max-w-full overflow-hidden">
+                  {selectedTopic.question.text && (
+                    <div
+                      className="text-sm text-gray-500 whitespace-pre-wrap break-words leading-relaxed prose prose-sm max-w-none prose-p:my-1 prose-a:text-blue-500"
+                      dangerouslySetInnerHTML={createSafeHtml(selectedTopic.question.text)}
+                    />
+                  )}
+                  {/* 提问图片 */}
+                  {selectedTopic.question.images && selectedTopic.question.images.length > 0 && (
+                    <div className="mt-3">
+                      <ImageGallery
+                        images={selectedTopic.question.images}
+                        size="small"
+                        groupId={groupId}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 回答部分 - 直接显示内容，不使用特殊框 */}
+              {selectedTopic.answer && selectedTopic.answer.text && (
+                <div className="w-full max-w-full overflow-hidden">
+                  <div
+                    className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed prose prose-sm max-w-none prose-p:my-1 prose-strong:text-gray-900 prose-a:text-blue-600"
+                    dangerouslySetInnerHTML={createSafeHtml(selectedTopic.answer.text)}
+                  />
+                  {/* 回答图片 */}
+                  {selectedTopic.answer.images && selectedTopic.answer.images.length > 0 && (
+                    <div className="mt-3">
+                      <ImageGallery
+                        images={selectedTopic.answer.images}
+                        size="small"
+                        groupId={groupId}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 正文内容（非Q&A类型或作为补充内容） */}
+          {selectedTopic.full_text && selectedTopic.type !== 'q&a' && (
             <div 
               className="prose prose-gray max-w-none mb-6"
               dangerouslySetInnerHTML={createSafeHtml(selectedTopic.full_text)}
@@ -588,44 +668,152 @@ export default function ColumnsPage() {
           )}
 
           {/* 评论列表 */}
-          {selectedTopic.comments && selectedTopic.comments.length > 0 && (
+          {(selectedTopic.comments && selectedTopic.comments.length > 0) || selectedTopic.comments_count > 0 ? (
             <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                <MessageCircle className="h-5 w-5" />
-                评论 ({selectedTopic.comments.length})
-              </h3>
-              <div className="space-y-3">
-                {selectedTopic.comments.map((comment) => (
-                  <div key={comment.comment_id} className="bg-gray-50 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <MessageCircle className="h-5 w-5" />
+                  评论 ({(() => {
+                    // 计算总评论数（包括嵌套回复）
+                    let total = 0;
+                    selectedTopic.comments?.forEach(c => {
+                      total += 1;
+                      if (c.replied_comments) {
+                        total += c.replied_comments.length;
+                      }
+                    });
+                    return total;
+                  })()}/{selectedTopic.comments_count})
+                </h3>
+                {/* 获取更多评论按钮 */}
+                {selectedTopic.comments_count > (() => {
+                  let total = 0;
+                  selectedTopic.comments?.forEach(c => {
+                    total += 1;
+                    if (c.replied_comments) {
+                      total += c.replied_comments.length;
+                    }
+                  });
+                  return total;
+                })() && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleFetchMoreComments}
+                    disabled={loadingComments}
+                    className="text-xs"
+                  >
+                    <RefreshCw className={`h-3 w-3 mr-1 ${loadingComments ? 'animate-spin' : ''}`} />
+                    {loadingComments ? '获取中...' : '获取完整评论'}
+                  </Button>
+                )}
+              </div>
+              <div className="space-y-2">
+                {selectedTopic.comments?.map((comment) => (
+                  <div key={comment.comment_id} className="bg-gray-50 rounded-lg p-2">
+                    <div className="flex items-center gap-2 mb-1">
                       {comment.owner && (
+                        <img
+                          src={apiClient.getProxyImageUrl(comment.owner.avatar_url || '', groupId)}
+                          alt={comment.owner.name}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-4 h-4 rounded-full object-cover block"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      )}
+                      <span className="text-xs font-medium text-gray-700">
+                        {comment.owner?.name || '未知用户'}
+                      </span>
+                      {/* 显示回复关系 */}
+                      {comment.repliee && (
                         <>
-                          <img
-                            src={apiClient.getProxyImageUrl(comment.owner.avatar_url || '', groupId)}
-                            alt={comment.owner.name}
-                            className="w-6 h-6 rounded-full object-cover"
-                            onError={(e) => {
-                              e.currentTarget.src = '/default-avatar.png';
-                            }}
-                          />
-                          <span className="text-sm font-medium text-gray-700">
-                            {comment.owner.name}
+                          <span className="text-xs text-gray-400">回复</span>
+                          <span className="text-xs font-medium text-blue-600">
+                            {comment.repliee.name}
                           </span>
                         </>
                       )}
-                      <span className="text-xs text-gray-400">
+                      <span className="text-xs text-gray-500">
                         {formatTime(comment.create_time)}
                       </span>
                     </div>
-                    <div 
-                      className="text-sm text-gray-700"
+                    <div
+                      className="text-xs text-gray-600 ml-6 break-words prose prose-xs max-w-none prose-a:text-blue-600"
                       dangerouslySetInnerHTML={createSafeHtml(comment.text || '')}
                     />
+
+                    {/* 评论图片 */}
+                    {comment.images && comment.images.length > 0 && (
+                      <div className="ml-6 mt-2">
+                        <ImageGallery
+                          images={comment.images}
+                          className="comment-images"
+                          size="small"
+                          groupId={groupId}
+                        />
+                      </div>
+                    )}
+
+                    {/* 嵌套回复评论 */}
+                    {comment.replied_comments && comment.replied_comments.length > 0 && (
+                      <div className="ml-6 mt-2 space-y-2 border-l-2 border-gray-200 pl-3">
+                        {comment.replied_comments.map((reply) => (
+                          <div key={reply.comment_id} className="bg-white rounded p-2">
+                            <div className="flex items-center gap-2 mb-1">
+                              {reply.owner && (
+                                <img
+                                  src={apiClient.getProxyImageUrl(reply.owner.avatar_url || '', groupId)}
+                                  alt={reply.owner.name}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="w-3 h-3 rounded-full object-cover block"
+                                  onError={(e) => {
+                                    (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                  }}
+                                />
+                              )}
+                              <span className="text-xs font-medium text-gray-600">
+                                {reply.owner?.name || '未知用户'}
+                              </span>
+                              {reply.repliee && (
+                                <>
+                                  <span className="text-xs text-gray-400">回复</span>
+                                  <span className="text-xs font-medium text-blue-500">
+                                    {reply.repliee.name}
+                                  </span>
+                                </>
+                              )}
+                              <span className="text-xs text-gray-400">
+                                {formatTime(reply.create_time)}
+                              </span>
+                            </div>
+                            <div
+                              className="text-xs text-gray-500 ml-5 break-words prose prose-xs max-w-none prose-a:text-blue-600"
+                              dangerouslySetInnerHTML={createSafeHtml(reply.text || '')}
+                            />
+                            {/* 嵌套回复图片 */}
+                            {reply.images && reply.images.length > 0 && (
+                              <div className="ml-5 mt-1">
+                                <ImageGallery
+                                  images={reply.images}
+                                  className="reply-images"
+                                  size="small"
+                                  groupId={groupId}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </ScrollArea>
     );

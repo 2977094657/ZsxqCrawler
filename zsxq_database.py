@@ -1191,9 +1191,15 @@ class ZSXQDatabase:
                 ORDER BY c.create_time ASC
             ''', (topic_id,))
 
-            show_comments = []
+            # 先收集所有评论，然后构建嵌套结构
+            all_comments = {}  # comment_id -> comment_data
+            parent_comments = []  # 顶级评论
+            child_comments = []   # 子评论（有parent_comment_id的）
+
             for comment_row in self.cursor.fetchall():
                 comment_id = comment_row[0]
+                parent_comment_id = comment_row[6]
+
                 comment_data = {
                     "comment_id": comment_id,
                     "text": comment_row[1],
@@ -1201,7 +1207,7 @@ class ZSXQDatabase:
                     "likes_count": comment_row[3],
                     "rewards_count": comment_row[4],
                     "sticky": bool(comment_row[5]),
-                    "parent_comment_id": comment_row[6],
+                    "parent_comment_id": parent_comment_id,
                     "replies_count": comment_row[7],
                     "owner": {
                         "user_id": comment_row[8],
@@ -1258,8 +1264,23 @@ class ZSXQDatabase:
                 if images:
                     comment_data["images"] = images
 
-                show_comments.append(comment_data)
-            topic_detail["show_comments"] = show_comments
+                # 存储评论并分类
+                all_comments[comment_id] = comment_data
+                if parent_comment_id:
+                    child_comments.append(comment_data)
+                else:
+                    parent_comments.append(comment_data)
+
+            # 构建嵌套结构：将子评论附加到父评论的 replied_comments 中
+            for child in child_comments:
+                parent_id = child.get("parent_comment_id")
+                if parent_id and parent_id in all_comments:
+                    parent = all_comments[parent_id]
+                    if "replied_comments" not in parent:
+                        parent["replied_comments"] = []
+                    parent["replied_comments"].append(child)
+
+            topic_detail["show_comments"] = parent_comments
 
             # 5. 获取点赞详情（表情）
             self.cursor.execute('''
