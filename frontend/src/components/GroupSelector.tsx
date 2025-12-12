@@ -33,6 +33,36 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
     loadGroups();
   }, []);
 
+  // 监听页面可见性变化和窗口焦点，返回页面时自动刷新群组列表
+  // 使用节流避免频繁刷新
+  useEffect(() => {
+    let lastRefresh = 0;
+    const REFRESH_INTERVAL = 5000; // 最少间隔 5 秒
+
+    const maybeRefresh = () => {
+      const now = Date.now();
+      if (now - lastRefresh > REFRESH_INTERVAL) {
+        lastRefresh = now;
+        loadGroups(0);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        maybeRefresh();
+      }
+    };
+    const handleFocus = () => {
+      maybeRefresh();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
   const loadGroups = async (currentRetryCount = 0) => {
     try {
       if (currentRetryCount === 0) {
@@ -306,165 +336,113 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                 {accountGroups.map((group) => {
               const stats = groupStats[group.group_id];
               return (
-                <Card
+                <div
                   key={group.group_id}
-                  className="group-card w-[250px] cursor-pointer border border-gray-200 hover:border-gray-300 transition-all duration-200 shadow-none hover:shadow-sm"
+                  className="group-card cursor-pointer bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-all duration-200 hover:shadow-md overflow-hidden w-[200px]"
                   onClick={() => router.push(`/groups/${group.group_id}`)}
                 >
-                  <CardContent className="p-3">
-                    {/* 群组封面：固定 250x250，完整展示图片（容器最大宽度 250） */}
-                    <div className="mb-2 flex justify-center">
-                      <SafeImage
-                        src={group.background_url}
-                        alt={group.name}
-                        className="w-[250px] h-[250px] rounded-lg object-contain"
-                        fallbackClassName="w-[250px] h-[250px] rounded-lg bg-muted"
-                        fallbackText={group.name.slice(0, 2)}
-                        fallbackGradient={getGradientByType(group.type)}
-                      />
-                    </div>
+                  {/* 群组封面：固定200x200 */}
+                  <div className="w-[200px] h-[200px]">
+                    <SafeImage
+                      src={group.background_url}
+                      alt={group.name}
+                      className="w-full h-full object-cover"
+                      fallbackClassName="w-full h-full bg-gradient-to-br"
+                      fallbackText={group.name.slice(0, 2)}
+                      fallbackGradient={getGradientByType(group.type)}
+                    />
+                  </div>
 
+                  {/* 内容区域 */}
+                  <div className="p-2.5">
                     {/* 群组名称 */}
-                    <h3 className="text-sm font-semibold text-gray-900 line-clamp-2 mb-1">
+                    <h3 className="text-sm font-semibold text-gray-900 line-clamp-1 mb-1.5">
                       {group.name}
                     </h3>
 
                     {/* 统计信息 */}
-                    <div className="space-y-1 mb-2">
-                      <div className="flex items-center justify-between text-sm">
-                        {/* 群主信息 */}
-                        {group.owner && (
-                          <div className="flex items-center gap-1 text-gray-600">
-                            <Crown className="h-4 w-4" />
-                            <span className="truncate">{group.owner.name}</span>
-                          </div>
-                        )}
+                    <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
+                      {/* 群主信息 */}
+                      {group.owner && (
+                        <div className="flex items-center gap-1">
+                          <Crown className="h-3 w-3" />
+                          <span className="truncate max-w-[60px]">{group.owner.name}</span>
+                        </div>
+                      )}
 
-                        {/* 话题数量 */}
-                        {stats && (
-                          <div className="flex items-center gap-1 text-gray-600">
-                            <MessageSquare className="h-4 w-4" />
-                            <span>{stats.topics_count || 0}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 所属账号标记（头像 + 名称） */}
-                      <div className="flex items-center gap-2 text-xs text-gray-600">
-                        {accountSelfMap[group.group_id]?.avatar_url ? (
-                          <img
-                            src={apiClient.getProxyImageUrl(accountSelfMap[group.group_id]!.avatar_url!)}
-                            alt={accountSelfMap[group.group_id]?.name || ''}
-                            className="w-5 h-5 rounded-full"
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                          />
-                        ) : (
-                          <div className="w-5 h-5 rounded-full bg-gray-200" />
-                        )}
-                        <span className="truncate">
-                          {accountSelfMap[group.group_id]?.name ||
-                           (group.account?.name || group.account?.id) ||
-                           '默认账号'}
-                        </span>
-                      </div>
+                      {/* 话题数量 */}
+                      {stats && (
+                        <div className="flex items-center gap-1">
+                          <MessageSquare className="h-3 w-3" />
+                          <span>{stats.topics_count || 0}</span>
+                        </div>
+                      )}
                     </div>
 
-                    {/* 类型标识和状态 */}
+                    {/* 类型标识和删除 */}
                     <div className="flex items-center justify-between">
-                      {/* 根据付费状态和过期情况显示不同颜色 */}
+                      {/* 根据付费状态显示不同颜色 */}
                       {group.type === 'pay' ? (
-                        // 付费群组：检查是否过期或即将过期
                         group.status === 'expired' ? (
-                          <Badge variant="destructive" className="text-xs">
-                            {group.is_trial ? '试用已过期' : '付费已过期'}
+                          <Badge variant="destructive" className="text-xs px-1.5 py-0 h-5">
+                            已过期
                           </Badge>
                         ) : isExpiringWithinMonth(group.expiry_time) ? (
-                          <Badge variant="outline" className="text-xs text-yellow-600 border-yellow-200">
-                            {group.is_trial ? '试用即将过期' : '付费即将过期'}
+                          <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 text-yellow-600 border-yellow-200">
+                            即将过期
                           </Badge>
                         ) : (
-                          <Badge className={`text-xs ${group.is_trial ? 'bg-purple-600 hover:bg-purple-700' : 'bg-green-600 hover:bg-green-700'}`}>
-                            {group.is_trial ? '试用中' : '付费'}
+                          <Badge className={`text-xs px-1.5 py-0 h-5 ${group.is_trial ? 'bg-purple-600' : 'bg-green-600'}`}>
+                            {group.is_trial ? '试用' : '付费'}
                           </Badge>
                         )
                       ) : (
-                        <Badge variant="secondary" className="text-xs">
-                          {group.type === 'free' ? '免费' : group.type}
+                        <Badge variant="secondary" className="text-xs px-1.5 py-0 h-5">
+                          免费
                         </Badge>
                       )}
 
-                      {/* 来源标签 + 删除 */}
-                      <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1">
-                          {group.source?.includes('account') && (
-                            <Badge variant="secondary" className="text-xs">账号</Badge>
-                          )}
-                          {group.source?.includes('local') && (
-                            <Badge variant="outline" className="text-xs">本地</Badge>
-                          )}
-                        </div>
-
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); }}
-                              className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800"
-                              title="删除该社群的本地数据"
-                              disabled={deletingGroups.has(group.group_id)}
+                      {/* 删除按钮 */}
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); }}
+                            className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                            title="删除本地数据"
+                            disabled={deletingGroups.has(group.group_id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle className="text-red-600">确认删除该社群的本地数据</AlertDialogTitle>
+                            <AlertDialogDescription className="text-red-700">
+                              此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteGroup(group.group_id);
+                              }}
                             >
-                              <Trash2 className="h-3 w-3" />
-                              {deletingGroups.has(group.group_id) ? '删除中' : '删除'}
-                            </button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent onClick={(e) => e.stopPropagation()}>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle className="text-red-600">确认删除该社群的本地数据</AlertDialogTitle>
-                              <AlertDialogDescription className="text-red-700">
-                                此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
-                              <AlertDialogAction
-                                className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteGroup(group.group_id);
-                                }}
-                              >
-                                确认删除
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
+                              确认删除
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
-
-                    {/* 时间信息 */}
-                    <div className="mt-3 pt-3 border-t border-gray-100">
-                      <div className="space-y-1 text-xs text-gray-500">
-                        {group.join_time && (
-                          <div>
-                            加入时间: {formatDate(group.join_time)}
-                          </div>
-                        )}
-                        {group.expiry_time && (
-                          <div className={
-                            group.status === 'expiring_soon' ? 'text-yellow-600' :
-                            group.status === 'expired' ? 'text-red-600' : ''
-                          }>
-                            {group.is_trial ? '试用' : '会员'}过期时间: {formatDate(group.expiry_time)}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               );
             })}
               </div>
@@ -484,142 +462,96 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                 {localGroups.map((group) => {
                   const stats = groupStats[group.group_id];
                   return (
-                    <Card
+                    <div
                       key={group.group_id}
-                      className="group-card w-[250px] cursor-pointer border border-gray-200 hover:border-gray-300 transition-all duration-200 shadow-none hover:shadow-sm"
+                      className="group-card cursor-pointer bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-all duration-200 hover:shadow-md overflow-hidden w-[200px]"
                       onClick={() => router.push(`/groups/${group.group_id}`)}
                     >
-                      <CardContent className="p-3">
-                        {/* 群组封面：固定 250x250，完整展示图片（容器最大宽度 250） */}
-                        <div className="mb-2 flex justify-center">
-                          <SafeImage
-                            src={group.background_url}
-                            alt={group.name}
-                            className="w-[250px] h-[250px] rounded-lg object-contain"
-                            fallbackClassName="w-[250px] h-[250px] rounded-lg bg-muted"
-                            fallbackText={group.name.slice(0, 2)}
-                            fallbackGradient={getGradientByType(group.type)}
-                          />
-                        </div>
+                      {/* 群组封面：固定200x200 */}
+                      <div className="w-[200px] h-[200px]">
+                        <SafeImage
+                          src={group.background_url}
+                          alt={group.name}
+                          className="w-full h-full object-cover"
+                          fallbackClassName="w-full h-full bg-gradient-to-br"
+                          fallbackText={group.name.slice(0, 2)}
+                          fallbackGradient={getGradientByType(group.type)}
+                        />
+                      </div>
 
+                      {/* 内容区域 */}
+                      <div className="p-2.5">
                         {/* 群组名称 */}
-                        <h3 className="text-sm font-semibold text-gray-900 line-clamp-2 mb-1">
+                        <h3 className="text-sm font-semibold text-gray-900 line-clamp-1 mb-1.5">
                           {group.name}
                         </h3>
 
                         {/* 统计信息 */}
-                        <div className="space-y-1 mb-2">
-                          <div className="flex items-center justify-between text-sm">
-                            {/* 群主信息 */}
-                            {group.owner && (
-                              <div className="flex items-center gap-1 text-gray-600">
-                                <Crown className="h-4 w-4" />
-                                <span className="truncate">{group.owner.name}</span>
-                              </div>
-                            )}
+                        <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
+                          {/* 群主信息 */}
+                          {group.owner && (
+                            <div className="flex items-center gap-1">
+                              <Crown className="h-3 w-3" />
+                              <span className="truncate max-w-[60px]">{group.owner.name}</span>
+                            </div>
+                          )}
 
-                            {/* 话题数量 */}
-                            {stats && (
-                              <div className="flex items-center gap-1 text-gray-600">
-                                <MessageSquare className="h-4 w-4" />
-                                <span>{stats.topics_count || 0}</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 所属账号标记（头像 + 名称） */}
-                          <div className="flex items-center gap-2 text-xs text-gray-600">
-                            {accountSelfMap[group.group_id]?.avatar_url ? (
-                              <img
-                                src={apiClient.getProxyImageUrl(accountSelfMap[group.group_id]!.avatar_url!)}
-                                alt={accountSelfMap[group.group_id]?.name || ''}
-                                className="w-5 h-5 rounded-full"
-                                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                              />
-                            ) : (
-                              <div className="w-5 h-5 rounded-full bg-gray-200" />
-                            )}
-                            <span className="truncate">
-                              {accountSelfMap[group.group_id]?.name ||
-                               (group.account?.name || group.account?.id) ||
-                               '默认账号'}
-                            </span>
-                          </div>
+                          {/* 话题数量 */}
+                          {stats && (
+                            <div className="flex items-center gap-1">
+                              <MessageSquare className="h-3 w-3" />
+                              <span>{stats.topics_count || 0}</span>
+                            </div>
+                          )}
                         </div>
 
-                        {/* 类型标识和状态 */}
+                        {/* 类型标识和删除 */}
                         <div className="flex items-center justify-between">
-                          {/* 本地群组类型统一标记 */}
-                          <Badge variant="secondary" className="text-xs">
+                          <Badge variant="secondary" className="text-xs px-1.5 py-0 h-5">
                             本地
                           </Badge>
 
-                          {/* 来源标签 + 删除 */}
-                          <div className="flex items-center gap-2">
-                            <div className="flex items-center gap-1">
-                              {group.source?.includes('local') && (
-                                <Badge variant="outline" className="text-xs">本地</Badge>
-                              )}
-                            </div>
-
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); }}
-                                  className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800"
-                                  title="删除该社群的本地数据"
-                                  disabled={deletingGroups.has(group.group_id)}
+                          {/* 删除按钮 */}
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); }}
+                                className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                                title="删除本地数据"
+                                disabled={deletingGroups.has(group.group_id)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle className="text-red-600">确认删除该社群的本地数据</AlertDialogTitle>
+                                <AlertDialogDescription className="text-red-700">
+                                  此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
+                                <AlertDialogAction
+                                  className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteGroup(group.group_id);
+                                  }}
                                 >
-                                  <Trash2 className="h-3 w-3" />
-                                  {deletingGroups.has(group.group_id) ? '删除中' : '删除'}
-                                </button>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent onClick={(e) => e.stopPropagation()}>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle className="text-red-600">确认删除该社群的本地数据</AlertDialogTitle>
-                                  <AlertDialogDescription className="text-red-700">
-                                    此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleDeleteGroup(group.group_id);
-                                    }}
-                                  >
-                                    确认删除
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          </div>
+                                  确认删除
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         </div>
-
-                        {/* 时间信息 */}
-                        <div className="mt-2 pt-2 border-t border-gray-100">
-                          <div className="space-y-1 text-xs text-gray-500">
-                            {group.join_time && (
-                              <div>
-                                加入时间: {formatDate(group.join_time)}
-                              </div>
-                            )}
-                            {group.expiry_time && (
-                              <div>
-                                本地数据最新时间: {formatDate(group.expiry_time)}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
