@@ -32,17 +32,8 @@ from zsxq_database import ZSXQDatabase
 from zsxq_file_database import ZSXQFileDatabase
 from db_path_manager import get_db_path_manager
 from image_cache_manager import get_image_cache_manager
-from accounts_manager import (
-    get_accounts as am_get_accounts,
-    add_account as am_add_account,
-    delete_account as am_delete_account,
-    set_default_account as am_set_default_account,
-    assign_group_account as am_assign_group_account,
-    get_account_for_group as am_get_account_for_group,
-    get_account_summary_for_group as am_get_account_summary_for_group,
-    get_default_account as am_get_default_account,
-    get_account_by_id as am_get_account_by_id,
-)
+# 使用SQL账号管理器
+from accounts_sql_manager import get_accounts_sql_manager
 from account_info_db import get_account_info_db
 from zsxq_columns_database import ZSXQColumnsDatabase
 from logger_config import log_info, log_warning, log_error, log_exception, log_debug, ensure_configured
@@ -243,7 +234,6 @@ class ColumnsSettingsRequest(BaseModel):
 class AccountCreateRequest(BaseModel):
     cookie: str = Field(..., description="账号Cookie")
     name: Optional[str] = Field(default=None, description="账号名称")
-    make_default: Optional[bool] = Field(default=False, description="是否设为默认账号")
 
 class AssignGroupAccountRequest(BaseModel):
     account_id: str = Field(..., description="账号ID")
@@ -317,14 +307,15 @@ def get_crawler_safe() -> Optional[ZSXQInteractiveCrawler]:
 def get_primary_cookie() -> Optional[str]:
     """
     获取当前优先使用的Cookie：
-    1. 若账号管理中存在默认账号，则优先使用默认账号的Cookie
+    1. 若账号管理中存在账号，则优先使用第一个账号的Cookie
     2. 否则回退到 config.toml 中的 Cookie（若已配置）
     """
-    # 1. 默认账号
+    # 1. 第一个账号
     try:
-        default_acc = am_get_default_account(mask_cookie=False)
-        if default_acc:
-            cookie = (default_acc.get("cookie") or "").strip()
+        sql_mgr = get_accounts_sql_manager()
+        first_acc = sql_mgr.get_first_account(mask_cookie=False)
+        if first_acc:
+            cookie = (first_acc.get("cookie") or "").strip()
             if cookie:
                 return cookie
     except Exception:
@@ -536,69 +527,56 @@ dir = "downloads"
 # 账号管理 API
 @app.get("/api/accounts")
 async def list_accounts():
+    """获取所有账号列表"""
     try:
-        accounts = am_get_accounts(mask_cookie=True)
-        # 若未添加本地账号，但在 config.toml 中存在默认 Cookie，则返回一个“默认账号”占位
-        if not accounts:
-            cfg = load_config()
-            auth = cfg.get('auth', {}) if cfg else {}
-            default_cookie = auth.get('cookie', '')
-            if default_cookie and default_cookie != "your_cookie_here":
-                accounts = [{
-                    "id": "default",
-                    "name": "默认账号",
-                    "cookie": "***",
-                    "is_default": True,
-                    "created_at": None,
-                }]
+        sql_mgr = get_accounts_sql_manager()
+        accounts = sql_mgr.get_accounts(mask_cookie=True)
         return {"accounts": accounts}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取账号列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve account list: {str(e)}")
 
 @app.post("/api/accounts")
 async def create_account(request: AccountCreateRequest):
+    """创建新账号"""
     try:
-        acc = am_add_account(request.cookie, request.name, request.make_default or False)
-        safe_acc = am_get_account_by_id(acc.get("id"), mask_cookie=True)
+        sql_mgr = get_accounts_sql_manager()
+        acc = sql_mgr.add_account(request.cookie, request.name)
+        safe_acc = sql_mgr.get_account_by_id(acc.get("id"), mask_cookie=True)
+        # 清除账号群组检测缓存，使新账号的群组立即可见
+        clear_account_detect_cache()
         return {"account": safe_acc}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"新增账号失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create account: {str(e)}")
 
 @app.delete("/api/accounts/{account_id}")
 async def remove_account(account_id: str):
+    """删除账号"""
     try:
-        ok = delete_account_success = am_delete_account(account_id)
+        sql_mgr = get_accounts_sql_manager()
+        ok = sql_mgr.delete_account(account_id)
         if not ok:
-            raise HTTPException(status_code=404, detail="账号不存在")
+            raise HTTPException(status_code=404, detail="Account does not exist")
+        # 清除账号群组检测缓存
+        clear_account_detect_cache()
         return {"success": True}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除账号失败: {str(e)}")
-
-@app.post("/api/accounts/{account_id}/default")
-async def make_default_account(account_id: str):
-    try:
-        ok = am_set_default_account(account_id)
-        if not ok:
-            raise HTTPException(status_code=404, detail="账号不存在")
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"设置默认账号失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete account: {str(e)}")
 
 @app.post("/api/groups/{group_id}/assign-account")
 async def assign_account_to_group(group_id: str, request: AssignGroupAccountRequest):
+    """分配群组到指定账号"""
     try:
-        ok, msg = am_assign_group_account(group_id, request.account_id)
+        sql_mgr = get_accounts_sql_manager()
+        ok, msg = sql_mgr.assign_group_account(group_id, request.account_id)
         if not ok:
             raise HTTPException(status_code=400, detail=msg)
         return {"success": True, "message": msg}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"分配账号失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to assign account: {str(e)}")
 
 @app.get("/api/groups/{group_id}/account")
 async def get_group_account(group_id: str):
@@ -618,27 +596,22 @@ async def get_account_self(account_id: str):
         if info:
             return {"self": info}
 
-        # 若数据库无记录则抓取，支持 'default' 伪账号（来自 config.toml）
-        cookie = None
-        acc = am_get_account_by_id(account_id, mask_cookie=False)
-        if acc:
-            cookie = acc.get("cookie", "")
-        elif account_id == "default":
-            cfg = load_config()
-            auth = cfg.get('auth', {}) if cfg else {}
-            cookie = auth.get('cookie', '')
-        else:
-            raise HTTPException(status_code=404, detail="账号不存在")
+        # 若数据库无记录则抓取
+        sql_mgr = get_accounts_sql_manager()
+        acc = sql_mgr.get_account_by_id(account_id, mask_cookie=False)
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account does not exist")
 
+        cookie = acc.get("cookie", "")
         if not cookie:
-            raise HTTPException(status_code=400, detail="账号未配置Cookie")
+            raise HTTPException(status_code=400, detail="Account has no configured Cookie")
 
         headers = build_stealth_headers(cookie)
         resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         if not data.get('succeeded'):
-            raise HTTPException(status_code=400, detail="API返回失败")
+            raise HTTPException(status_code=400, detail="API returned failure")
 
         rd = data.get('resp_data', {}) or {}
         user = rd.get('user', {}) or {}
@@ -657,35 +630,29 @@ async def get_account_self(account_id: str):
     except HTTPException:
         raise
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Network request failed: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取账号信息失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve account info: {str(e)}")
 
 @app.post("/api/accounts/{account_id}/self/refresh")
 async def refresh_account_self(account_id: str):
     """强制抓取 /v3/users/self 并更新持久化"""
     try:
-        # 支持 'default' 伪账号（来自 config.toml）
-        cookie = None
-        acc = am_get_account_by_id(account_id, mask_cookie=False)
-        if acc:
-            cookie = acc.get("cookie", "")
-        elif account_id == "default":
-            cfg = load_config()
-            auth = cfg.get('auth', {}) if cfg else {}
-            cookie = auth.get('cookie', '')
-        else:
-            raise HTTPException(status_code=404, detail="账号不存在")
+        sql_mgr = get_accounts_sql_manager()
+        acc = sql_mgr.get_account_by_id(account_id, mask_cookie=False)
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account does not exist")
 
+        cookie = acc.get("cookie", "")
         if not cookie:
-            raise HTTPException(status_code=400, detail="账号未配置Cookie")
+            raise HTTPException(status_code=400, detail="Account has no configured Cookie")
 
         headers = build_stealth_headers(cookie)
         resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         if not data.get('succeeded'):
-            raise HTTPException(status_code=400, detail="API返回失败")
+            raise HTTPException(status_code=400, detail="API returned failure")
 
         rd = data.get('resp_data', {}) or {}
         user = rd.get('user', {}) or {}
@@ -705,9 +672,9 @@ async def refresh_account_self(account_id: str):
     except HTTPException:
         raise
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Network request failed: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"刷新账号信息失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to refresh account info: {str(e)}")
 
 @app.get("/api/groups/{group_id}/self")
 async def get_group_account_self(group_id: str):
@@ -3588,29 +3555,18 @@ _account_detect_cache: Dict[str, Any] = {
     "cookie_by_account": {}
 }
 
+def clear_account_detect_cache():
+    """清除账号群组检测缓存，使新账号/删除账号后群组立即刷新"""
+    _account_detect_cache["built_at"] = 0
+
 def _get_all_account_sources() -> List[Dict[str, Any]]:
-    """组合账号来源：accounts.json + config.toml默认账号"""
+    """获取所有账号来源"""
     sources: List[Dict[str, Any]] = []
     try:
-        # 账号管理中的账号（含cookie）
-        accounts = am_get_accounts(mask_cookie=False)
+        sql_mgr = get_accounts_sql_manager()
+        accounts = sql_mgr.get_accounts(mask_cookie=False)
         if accounts:
             sources.extend(accounts)
-    except Exception:
-        pass
-    # 追加 config.toml 的默认cookie作为伪账号
-    try:
-        cfg = load_config()
-        auth = cfg.get('auth', {}) if cfg else {}
-        default_cookie = auth.get('cookie', '')
-        if default_cookie and default_cookie != "your_cookie_here":
-            sources.append({
-                "id": "default",
-                "name": "默认账号",
-                "cookie": default_cookie,
-                "is_default": True,
-                "created_at": None
-            })
     except Exception:
         pass
     return sources
@@ -3634,8 +3590,8 @@ def build_account_group_detection(force_refresh: bool = False) -> Dict[str, Dict
     sources = _get_all_account_sources()
     for src in sources:
         cookie = src.get("cookie", "")
-        acc_id = src.get("id", "default")
-        if not cookie or cookie == "your_cookie_here":
+        acc_id = src.get("id")
+        if not cookie or cookie == "your_cookie_here" or not acc_id:
             continue
 
         # 记录账号对应cookie
@@ -3648,8 +3604,7 @@ def build_account_group_detection(force_refresh: bool = False) -> Dict[str, Dict
                 if gid and gid not in group_to_account:
                     group_to_account[gid] = {
                         "id": acc_id,
-                        "name": src.get("name") or ("默认账号" if acc_id == "default" else acc_id),
-                        "is_default": bool(src.get("is_default") or acc_id == "default"),
+                        "name": src.get("name") or acc_id,
                         "created_at": src.get("created_at"),
                         "cookie": "***"
                     }
@@ -3676,22 +3631,26 @@ def get_cookie_for_group(group_id: str) -> str:
     return cookie
 
 def get_account_summary_for_group_auto(group_id: str) -> Optional[Dict[str, Any]]:
-    """返回自动匹配到的账号摘要；若无命中且存在默认cookie，则返回默认占位摘要"""
+    """返回自动匹配到的账号摘要"""
     mapping = build_account_group_detection(force_refresh=False)
     summary = mapping.get(str(group_id))
     if summary:
         return summary
-    cfg = load_config()
-    auth = cfg.get('auth', {}) if cfg else {}
-    default_cookie = auth.get('cookie', '')
-    if default_cookie:
-        return {
-            "id": "default",
-            "name": "默认账号",
-            "is_default": True,
-            "created_at": None,
-            "cookie": "***"
-        }
+
+    # 如果没有匹配的账号，返回第一个账号
+    try:
+        sql_mgr = get_accounts_sql_manager()
+        first_acc = sql_mgr.get_first_account(mask_cookie=True)
+        if first_acc:
+            return {
+                "id": first_acc["id"],
+                "name": first_acc["name"],
+                "created_at": first_acc["created_at"],
+                "cookie": first_acc["cookie"]
+            }
+    except Exception:
+        pass
+
     return None
 
 # =========================
@@ -4085,10 +4044,44 @@ async def get_column_topic_detail(group_id: str, topic_id: int):
         db = get_columns_db(group_id)
         detail = db.get_topic_detail(topic_id)
         db.close()
-        
+
         if not detail:
             raise HTTPException(status_code=404, detail="文章详情不存在")
-        
+
+        # 解析 raw_json 获取 Q&A 类型内容
+        if detail.get('raw_json'):
+            try:
+                raw_data = json.loads(detail['raw_json'])
+                topic_type = raw_data.get('type', '')
+
+                # Q&A 类型：提取 question 和 answer
+                if topic_type == 'q&a':
+                    question = raw_data.get('question', {})
+                    answer = raw_data.get('answer', {})
+
+                    detail['question'] = {
+                        'text': question.get('text', ''),
+                        'owner': question.get('owner'),
+                        'images': question.get('images', []),
+                    }
+                    detail['answer'] = {
+                        'text': answer.get('text', ''),
+                        'owner': answer.get('owner'),
+                        'images': answer.get('images', []),
+                    }
+                    # 如果 full_text 为空，使用 answer.text
+                    if not detail.get('full_text') and answer.get('text'):
+                        detail['full_text'] = answer.get('text', '')
+
+                # talk 类型：如果 full_text 为空，从 talk 提取
+                elif topic_type == 'talk':
+                    talk = raw_data.get('talk', {})
+                    if not detail.get('full_text') and talk.get('text'):
+                        detail['full_text'] = talk.get('text', '')
+
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         return detail
     except HTTPException:
         raise
@@ -4968,6 +4961,104 @@ async def delete_all_columns(group_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除专栏数据失败: {str(e)}")
+
+
+@app.get("/api/groups/{group_id}/columns/topics/{topic_id}/comments")
+async def get_column_topic_full_comments(group_id: str, topic_id: int):
+    """获取专栏文章的完整评论列表（从API实时获取并持久化到数据库）"""
+    try:
+        # 获取该群组使用的账号
+        manager = get_accounts_sql_manager()
+        account = manager.get_account_for_group(group_id, mask_cookie=False)
+        if not account or not account.get('cookie'):
+            raise HTTPException(status_code=400, detail="No valid account found for this group")
+
+        cookie = account['cookie']
+        # 使用与专栏采集相同的请求头构建方式
+        headers = build_stealth_headers(cookie)
+
+        # 获取完整评论（参数与官网一致）
+        comments_url = f"https://api.zsxq.com/v2/topics/{topic_id}/comments?sort=asc&count=30&with_sticky=true"
+        log_info(f"Fetching comments from: {comments_url}")
+        resp = requests.get(comments_url, headers=headers, timeout=30)
+
+        if resp.status_code != 200:
+            log_error(f"Failed to fetch comments: HTTP {resp.status_code}, response={resp.text[:500] if resp.text else 'empty'}")
+            raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch comments: HTTP {resp.status_code}")
+
+        data = resp.json()
+        log_debug(f"Comments API response: succeeded={data.get('succeeded')}, resp_data keys={list(data.get('resp_data', {}).keys()) if data.get('resp_data') else 'None'}")
+
+        if not data.get('succeeded'):
+            # 尝试多种错误消息格式
+            resp_data = data.get('resp_data', {})
+            error_msg = resp_data.get('message') or resp_data.get('error_msg') or data.get('error_msg') or data.get('message')
+            error_code = resp_data.get('code') or resp_data.get('error_code') or data.get('code')
+            log_error(f"Comments API failed: code={error_code}, message={error_msg}, full_response={json.dumps(data, ensure_ascii=False)[:500]}")
+            raise HTTPException(status_code=400, detail=f"API error: {error_msg or 'Request failed'} (code: {error_code})")
+
+        comments = data.get('resp_data', {}).get('comments', [])
+
+        # 处理评论数据，包括 replied_comments
+        processed_comments = []
+        for comment in comments:
+            processed = {
+                'comment_id': comment.get('comment_id'),
+                'parent_comment_id': comment.get('parent_comment_id'),
+                'text': comment.get('text', ''),
+                'create_time': comment.get('create_time'),
+                'likes_count': comment.get('likes_count', 0),
+                'rewards_count': comment.get('rewards_count', 0),
+                'replies_count': comment.get('replies_count', 0),
+                'sticky': comment.get('sticky', False),
+                'owner': comment.get('owner'),
+                'repliee': comment.get('repliee'),
+                'images': comment.get('images', []),
+            }
+
+            # 处理嵌套的 replied_comments
+            replied_comments = comment.get('replied_comments', [])
+            if replied_comments:
+                processed['replied_comments'] = [
+                    {
+                        'comment_id': rc.get('comment_id'),
+                        'parent_comment_id': rc.get('parent_comment_id'),
+                        'text': rc.get('text', ''),
+                        'create_time': rc.get('create_time'),
+                        'likes_count': rc.get('likes_count', 0),
+                        'owner': rc.get('owner'),
+                        'repliee': rc.get('repliee'),
+                        'images': rc.get('images', []),
+                    }
+                    for rc in replied_comments
+                ]
+
+            processed_comments.append(processed)
+
+        # 持久化评论到数据库
+        try:
+            db = get_columns_db(group_id)
+            saved_count = db.import_comments(topic_id, processed_comments)
+            db.close()
+            log_info(f"Saved {saved_count} comments to database for topic {topic_id}")
+        except Exception as e:
+            log_error(f"Failed to save comments to database: {e}")
+            # 不阻断流程，评论仍然返回给前端
+
+        # 计算总评论数（包括嵌套回复）
+        total_count = sum(1 + len(c.get('replied_comments', [])) for c in processed_comments)
+
+        return {
+            'success': True,
+            'comments': processed_comments,
+            'total': total_count
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_exception(f"获取专栏完整评论失败: topic_id={topic_id}")
+        raise HTTPException(status_code=500, detail=f"获取完整评论失败: {str(e)}")
 
 
 if __name__ == "__main__":

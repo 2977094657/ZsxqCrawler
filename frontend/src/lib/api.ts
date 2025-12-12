@@ -131,7 +131,6 @@ export interface Account {
   id: string;
   name?: string;
   cookie?: string; // 已掩码
-  is_default?: boolean;
   created_at?: string;
 }
 
@@ -594,13 +593,12 @@ class ApiClient {
     return this.request('/api/accounts');
   }
 
-  async createAccount(params: { cookie: string; name?: string; make_default?: boolean }) {
+  async createAccount(params: { cookie: string; name?: string }) {
     return this.request('/api/accounts', {
       method: 'POST',
       body: JSON.stringify({
         cookie: params.cookie,
         name: params.name,
-        make_default: params.make_default ?? false,
       }),
     });
   }
@@ -608,12 +606,6 @@ class ApiClient {
   async deleteAccount(accountId: string) {
     return this.request(`/api/accounts/${accountId}`, {
       method: 'DELETE',
-    });
-  }
-
-  async setDefaultAccount(accountId: string) {
-    return this.request(`/api/accounts/${accountId}/default`, {
-      method: 'POST',
     });
   }
 
@@ -697,6 +689,15 @@ class ApiClient {
   // 获取专栏文章详情
   async getColumnTopicDetail(groupId: number | string, topicId: number): Promise<ColumnTopicDetail> {
     return this.request(`/api/groups/${groupId}/columns/topics/${topicId}`);
+  }
+
+  // 获取专栏文章完整评论
+  async getColumnTopicFullComments(groupId: number | string, topicId: number): Promise<{
+    success: boolean;
+    comments: ColumnComment[];
+    total: number;
+  }> {
+    return this.request(`/api/groups/${groupId}/columns/topics/${topicId}/comments`);
   }
 
   // 采集群组所有专栏内容
@@ -784,6 +785,27 @@ export interface ColumnTopicDetail {
     description?: string;
     location?: string;
   };
+  // Q&A type content
+  question?: {
+    text?: string;
+    owner?: {
+      user_id: number;
+      name: string;
+      alias?: string;
+      avatar_url?: string;
+    };
+    images?: ColumnImage[];
+  };
+  answer?: {
+    text?: string;
+    owner?: {
+      user_id: number;
+      name: string;
+      alias?: string;
+      avatar_url?: string;
+    };
+    images?: ColumnImage[];
+  };
   images: ColumnImage[];
   files: ColumnFile[];
   videos: ColumnVideo[];
@@ -850,6 +872,15 @@ export interface ColumnComment {
     alias?: string;
     avatar_url?: string;
   };
+  images?: Array<{
+    image_id?: number;
+    type?: string;
+    thumbnail?: { url?: string; width?: number; height?: number };
+    large?: { url?: string; width?: number; height?: number };
+    original?: { url?: string; width?: number; height?: number };
+  }>;
+  // Nested replies
+  replied_comments?: ColumnComment[];
 }
 
 export interface ColumnsStats {

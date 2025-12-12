@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
@@ -26,7 +25,6 @@ export default function AccountPanel() {
   const [createOpen, setCreateOpen] = useState<boolean>(false);
   const [name, setName] = useState<string>('');
   const [cookie, setCookie] = useState<string>('');
-  const [makeDefault, setMakeDefault] = useState<boolean>(false);
 
   const loadAccounts = async () => {
     setLoading(true);
@@ -34,7 +32,7 @@ export default function AccountPanel() {
       const res = await apiClient.listAccounts();
       const list: AccountWithInfo[] = (res.accounts || []).map(acc => ({ ...acc, loadingSelf: true }));
       setAccounts(list);
-      
+
       // 并发加载所有账号的自我信息
       const promises = list.map(async (acc) => {
         try {
@@ -44,9 +42,9 @@ export default function AccountPanel() {
           return { id: acc.id, selfInfo: null };
         }
       });
-      
+
       const results = await Promise.all(promises);
-      
+
       // 更新账号列表，填入自我信息
       setAccounts(prev => prev.map(acc => {
         const result = results.find(r => r.id === acc.id);
@@ -70,11 +68,10 @@ export default function AccountPanel() {
     }
     setCreating(true);
     try {
-      await apiClient.createAccount({ cookie: cookie.trim(), name: name.trim() || undefined, make_default: makeDefault });
+      await apiClient.createAccount({ cookie: cookie.trim(), name: name.trim() || undefined });
       toast.success('账号已添加');
       setCookie('');
       setName('');
-      setMakeDefault(false);
       setCreateOpen(false);
       await loadAccounts();
     } catch (e: any) {
@@ -85,7 +82,7 @@ export default function AccountPanel() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('确认删除该账号？删除后分配到此账号的群组将回退到默认账号。')) return;
+    if (!confirm('确认删除该账号？')) return;
     try {
       await apiClient.deleteAccount(id);
       toast.success('账号已删除');
@@ -95,31 +92,21 @@ export default function AccountPanel() {
     }
   };
 
-  const handleSetDefault = async (id: string) => {
-    try {
-      await apiClient.setDefaultAccount(id);
-      toast.success('已设为默认账号');
-      await loadAccounts();
-    } catch (e: any) {
-      toast.error(`设置失败: ${e?.message || '未知错误'}`);
-    }
-  };
-
   const handleRefresh = async (id: string) => {
     // 标记该账号为刷新中
-    setAccounts(prev => prev.map(acc => 
+    setAccounts(prev => prev.map(acc =>
       acc.id === id ? { ...acc, loadingSelf: true } : acc
     ));
-    
+
     try {
       const res = await apiClient.refreshAccountSelf(id);
-      setAccounts(prev => prev.map(acc => 
+      setAccounts(prev => prev.map(acc =>
         acc.id === id ? { ...acc, selfInfo: res?.self || null, loadingSelf: false } : acc
       ));
       toast.success('信息已刷新');
     } catch (e: any) {
       toast.error(`刷新失败: ${e?.message || '未知错误'}`);
-      setAccounts(prev => prev.map(acc => 
+      setAccounts(prev => prev.map(acc =>
         acc.id === id ? { ...acc, loadingSelf: false } : acc
       ));
     }
@@ -131,7 +118,7 @@ export default function AccountPanel() {
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle>账号管理</CardTitle>
-            <CardDescription>表格展示账号信息，支持设为默认、刷新与删除操作</CardDescription>
+            <CardDescription>管理知识星球账号，支持刷新与删除操作</CardDescription>
           </div>
           <div>
             <Button variant="default" onClick={() => setCreateOpen(true)}>添加账号</Button>
@@ -152,7 +139,6 @@ export default function AccountPanel() {
                     <TableHead>UID</TableHead>
                     <TableHead>位置</TableHead>
                     <TableHead>Cookie</TableHead>
-                    <TableHead>默认</TableHead>
                     <TableHead>创建时间</TableHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
@@ -194,9 +180,6 @@ export default function AccountPanel() {
                       <TableCell className="max-w-[200px] truncate text-xs text-gray-500">
                         {acc.cookie || '***'}
                       </TableCell>
-                      <TableCell>
-                        {acc.is_default ? <Badge variant="secondary">默认</Badge> : <span className="text-gray-400">-</span>}
-                      </TableCell>
                       <TableCell className="text-sm text-gray-600">{acc.created_at || '-'}</TableCell>
                       <TableCell className="text-right space-x-2">
                         <Button
@@ -207,16 +190,9 @@ export default function AccountPanel() {
                         >
                           {acc.loadingSelf ? '刷新中...' : '刷新'}
                         </Button>
-                        {!acc.is_default && acc.id !== 'default' && (
-                          <Button size="sm" variant="outline" onClick={() => handleSetDefault(acc.id)}>
-                            设为默认
-                          </Button>
-                        )}
-                        {acc.id !== 'default' && (
-                          <Button size="sm" variant="destructive" onClick={() => handleDelete(acc.id)}>
-                            删除
-                          </Button>
-                        )}
+                        <Button size="sm" variant="destructive" onClick={() => handleDelete(acc.id)}>
+                          删除
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -243,19 +219,10 @@ export default function AccountPanel() {
               <Textarea
                 id="acc-cookie"
                 placeholder="粘贴完整的 Cookie 值..."
-                rows={4}
                 value={cookie}
                 onChange={(e) => setCookie(e.target.value)}
+                className="h-24 resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-all"
               />
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                id="acc-default"
-                type="checkbox"
-                checked={makeDefault}
-                onChange={(e) => setMakeDefault(e.target.checked)}
-              />
-              <Label htmlFor="acc-default">设为默认账号</Label>
             </div>
           </div>
           <DialogFooter className="mt-4">
