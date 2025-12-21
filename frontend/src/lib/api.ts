@@ -2,7 +2,7 @@
  * API客户端 - 与后端FastAPI服务通信
  */
 
-const API_BASE_URL = 'http://localhost:8208';
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || 'http://localhost:8208').replace(/\/$/, '');
 
 // 类型定义
 export interface ApiResponse<T = any> {

@@ -83,6 +83,12 @@ cd frontend
 npm run dev
 ```
 
+如果前后端不在同一台机器/容器中，前端默认请求 `http://localhost:8208` 会导致 `Failed to fetch`，请在 `frontend/.env.local` 中配置后端地址（示例）：
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://192.168.x.x:8208
+```
+
 然后访问：
 - **Web 界面**: http://localhost:3060
 - **API 文档**: http://localhost:8208/docs
