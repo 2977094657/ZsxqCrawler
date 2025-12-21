@@ -1484,11 +1484,7 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                     return is_task_stopped(task_id)
 
                 # 为这个任务创建新的爬虫实例（带日志回调），使用传入的group_id
-                config = load_config()
-                auth_config = config.get('auth', {})
-                default_cookie = auth_config.get('cookie', '')
-                account = am_get_account_for_group(group_id)
-                cookie = account.get('cookie', '') if account else default_cookie
+                cookie = get_cookie_for_group(group_id)
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
@@ -1572,11 +1568,7 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                     return is_task_stopped(task_id)
 
                 # 为每个任务创建独立的爬虫实例
-                config = load_config()
-                auth_config = config.get('auth', {})
-                default_cookie = auth_config.get('cookie', '')
-                account = am_get_account_for_group(group_id)
-                cookie = account.get('cookie', '') if account else default_cookie
+                cookie = get_cookie_for_group(group_id)
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
@@ -1641,11 +1633,7 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                     return is_task_stopped(task_id)
 
                 # 为每个任务创建独立的爬虫实例，使用传入的group_id
-                config = load_config()
-                auth_config = config.get('auth', {})
-                default_cookie = auth_config.get('cookie', '')
-                account = am_get_account_for_group(group_id)
-                cookie = account.get('cookie', '') if account else default_cookie
+                cookie = get_cookie_for_group(group_id)
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
@@ -1717,11 +1705,7 @@ async def collect_files(group_id: str, background_tasks: BackgroundTasks):
                     return is_task_stopped(task_id)
 
                 # 为每个任务创建独立的文件下载器实例
-                config = load_config()
-                auth_config = config.get('auth', {})
-                default_cookie = auth_config.get('cookie', '')
-                account = am_get_account_for_group(group_id)
-                cookie = account.get('cookie', '') if account else default_cookie
+                cookie = get_cookie_for_group(group_id)
 
                 from zsxq_file_downloader import ZSXQFileDownloader
                 from db_path_manager import get_db_path_manager
@@ -3007,7 +2991,7 @@ async def get_group_info(group_id: str):
                 "description": "",
                 "statistics": {"files": {"count": files_count}},
                 "background_url": None,
-                "account": am_get_account_summary_for_group(group_id),
+                "account": get_account_summary_for_group_auto(group_id),
                 "source": source,
             }
             if note:
@@ -3037,7 +3021,7 @@ async def get_group_info(group_id: str):
                     "description": group_data.get('description'),
                     "statistics": group_data.get('statistics', {}),
                     "background_url": group_data.get('background_url'),
-                    "account": am_get_account_summary_for_group(group_id),
+                    "account": get_account_summary_for_group_auto(group_id),
                     "source": "remote"
                 }
             # 官方返回非 succeeded，也走回退
