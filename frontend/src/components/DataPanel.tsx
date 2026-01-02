@@ -18,57 +18,73 @@ export default function DataPanel({ selectedGroup }: DataPanelProps) {
   const [topicsData, setTopicsData] = useState<PaginatedResponse<Topic> | null>(null);
   const [filesData, setFilesData] = useState<PaginatedResponse<FileItem> | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const selectedGroupId = selectedGroup?.group_id;
   
   // 话题查询参数
   const [topicsPage, setTopicsPage] = useState(1);
   const [topicsSearch, setTopicsSearch] = useState('');
+  const [topicsSearchQuery, setTopicsSearchQuery] = useState('');
   
   // 文件查询参数
   const [filesPage, setFilesPage] = useState(1);
   const [filesStatus, setFilesStatus] = useState<string>('');
 
   useEffect(() => {
-    loadTopics();
-  }, [topicsPage]);
+    setTopicsPage(1);
+    setFilesPage(1);
+  }, [selectedGroupId]);
 
   useEffect(() => {
-    loadFiles();
-  }, [filesPage, filesStatus]);
-
-  const loadTopics = async () => {
-    try {
-      setLoading(true);
-      let data;
-      if (selectedGroup) {
-        // 如果选择了群组，获取该群组的话题
-        data = await apiClient.getGroupTopics(selectedGroup.group_id, topicsPage, 20, topicsSearch || undefined);
-      } else {
-        // 否则获取所有话题
-        data = await apiClient.getTopics(topicsPage, 20, topicsSearch || undefined);
+    const loadTopics = async () => {
+      try {
+        setLoading(true);
+        let data;
+        if (selectedGroupId !== undefined) {
+          data = await apiClient.getGroupTopics(selectedGroupId, topicsPage, 20, topicsSearchQuery || undefined);
+        } else {
+          data = await apiClient.getTopics(topicsPage, 20, topicsSearchQuery || undefined);
+        }
+        setTopicsData(data);
+      } catch (error) {
+        console.error('加载话题数据失败:', error);
+      } finally {
+        setLoading(false);
       }
-      setTopicsData(data);
-    } catch (error) {
-      console.error('加载话题数据失败:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
 
-  const loadFiles = async () => {
-    try {
-      setLoading(true);
-      const data = await apiClient.getFiles(filesPage, 20, filesStatus || undefined);
-      setFilesData(data);
-    } catch (error) {
-      console.error('加载文件数据失败:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    loadTopics();
+  }, [selectedGroupId, topicsPage, topicsSearchQuery]);
+
+  useEffect(() => {
+    const loadFiles = async () => {
+      if (selectedGroupId === undefined) {
+        setFilesData(null);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const data = await apiClient.getFiles(selectedGroupId, filesPage, 20, filesStatus || undefined);
+        setFilesData(data);
+      } catch (error) {
+        console.error('加载文件数据失败:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadFiles();
+  }, [selectedGroupId, filesPage, filesStatus]);
 
   const handleTopicsSearch = () => {
     setTopicsPage(1);
-    loadTopics();
+    setTopicsSearchQuery(topicsSearch.trim());
+  };
+
+  const handleFilesStatusChange = (value: string) => {
+    setFilesPage(1);
+    setFilesStatus(value);
   };
 
   const formatFileSize = (bytes: number) => {
@@ -80,15 +96,19 @@ export default function DataPanel({ selectedGroup }: DataPanelProps) {
   };
 
   const formatDate = (dateString: string) => {
+    if (!dateString) return '-';
     return new Date(dateString).toLocaleString('zh-CN');
   };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'completed':
+      case 'downloaded':
         return <Badge className="bg-green-100 text-green-800">已完成</Badge>;
       case 'pending':
         return <Badge className="bg-yellow-100 text-yellow-800">待下载</Badge>;
+      case 'skipped':
+        return <Badge className="bg-slate-100 text-slate-800">已存在</Badge>;
       case 'failed':
         return <Badge className="bg-red-100 text-red-800">失败</Badge>;
       default:
@@ -197,9 +217,18 @@ export default function DataPanel({ selectedGroup }: DataPanelProps) {
             <CardDescription>查看已收集的文件信息</CardDescription>
           </CardHeader>
           <CardContent>
+            {selectedGroupId === undefined && (
+              <div className="text-sm text-muted-foreground mb-4">
+                请先选择一个群组再查看文件列表
+              </div>
+            )}
             {/* 状态筛选 */}
             <div className="flex gap-2 mb-4">
-              <Select value={filesStatus} onValueChange={setFilesStatus}>
+              <Select
+                value={filesStatus}
+                onValueChange={handleFilesStatusChange}
+                disabled={selectedGroupId === undefined}
+              >
                 <SelectTrigger className="w-48">
                   <SelectValue placeholder="选择状态筛选" />
                 </SelectTrigger>
@@ -207,6 +236,8 @@ export default function DataPanel({ selectedGroup }: DataPanelProps) {
                   <SelectItem value="">全部状态</SelectItem>
                   <SelectItem value="pending">待下载</SelectItem>
                   <SelectItem value="completed">已完成</SelectItem>
+                  <SelectItem value="downloaded">已完成(旧)</SelectItem>
+                  <SelectItem value="skipped">已存在</SelectItem>
                   <SelectItem value="failed">失败</SelectItem>
                 </SelectContent>
               </Select>

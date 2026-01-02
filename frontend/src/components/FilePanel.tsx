@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,23 +32,33 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
   const [maxFiles, setMaxFiles] = useState<number | undefined>(undefined);
   const [sortBy, setSortBy] = useState('download_count');
 
-  useEffect(() => {
-    loadFileStats();
-  }, []);
+  const loadFileStats = useCallback(async () => {
+    if (!selectedGroup) {
+      setFileStats(null);
+      return;
+    }
 
-  const loadFileStats = async () => {
     try {
-      const stats = await apiClient.getFileStats();
+      const stats = await apiClient.getFileStats(selectedGroup.group_id);
       setFileStats(stats);
     } catch (error) {
       console.error('加载文件统计失败:', error);
     }
-  };
+  }, [selectedGroup]);
+
+  useEffect(() => {
+    loadFileStats();
+  }, [loadFileStats]);
 
   const handleClearFileDatabase = async () => {
+    if (!selectedGroup) {
+      toast.error('请先选择一个群组');
+      return;
+    }
+
     try {
       setLoading('clear');
-      const response = await apiClient.clearFileDatabase();
+      await apiClient.clearFileDatabase(selectedGroup.group_id);
       toast.success('文件数据库已清除');
       onStatsUpdate();
       loadFileStats();
@@ -60,9 +70,14 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
   };
 
   const handleDownloadFiles = async () => {
+    if (!selectedGroup) {
+      toast.error('请先选择一个群组');
+      return;
+    }
+
     try {
       setLoading('download');
-      const response = await apiClient.downloadFiles(maxFiles, sortBy);
+      const response = await apiClient.downloadFiles(selectedGroup.group_id, maxFiles, sortBy);
       toast.success(`任务已创建: ${response.task_id}`);
       onStatsUpdate();
       loadFileStats();
@@ -75,6 +90,11 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
 
   return (
     <div className="space-y-4">
+      {!selectedGroup && (
+        <div className="text-sm text-muted-foreground">
+          请先选择一个群组再进行文件收集与下载
+        </div>
+      )}
       {/* 文件统计概览 */}
       {fileStats && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -165,7 +185,7 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
 
             <Button
               onClick={handleDownloadFiles}
-              disabled={loading === 'download'}
+              disabled={loading === 'download' || !selectedGroup}
               className="w-full"
             >
               {loading === 'download' ? '创建任务中...' : '开始下载'}
@@ -199,7 +219,7 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button
-                  disabled={loading === 'clear'}
+                  disabled={loading === 'clear' || !selectedGroup}
                   variant="destructive"
                   className="w-full"
                 >
