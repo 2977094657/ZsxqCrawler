@@ -13,6 +13,7 @@ from zsxq_database import ZSXQDatabase
 from zsxq_file_downloader import ZSXQFileDownloader
 from db_path_manager import get_db_path_manager
 import os
+import argparse
 try:
     import tomllib
 except ImportError:
@@ -1539,7 +1540,13 @@ class ZSXQInteractiveCrawler:
                         max_files = int(user_input)
                     else:
                         max_files = None
-                    downloader.download_files_from_database(max_files=max_files, status_filter='pending')
+                    
+                    days_input = input("只下载最近N天的文件 (默认无限，输入数字限制天数): ").strip()
+                    if days_input and days_input.isdigit():
+                        recent_days = int(days_input)
+                    else:
+                        recent_days = None
+                    downloader.download_files_from_database(max_files=max_files, status_filter='pending', recent_days=recent_days, order_by="download_count DESC")
                     
                 elif choice == "7":
                     # 按时间顺序下载文件 (集成收集和下载)
@@ -1568,7 +1575,14 @@ class ZSXQInteractiveCrawler:
                         max_files = int(user_input)
                     else:
                         max_files = None
-                    downloader.download_files_from_database(max_files=max_files, status_filter='pending')
+                    
+                    days_input = input("只下载最近N天的文件 (默认无限，输入数字限制天数): ").strip()
+                    if days_input and days_input.isdigit():
+                        recent_days = int(days_input)
+                    else:
+                        recent_days = None
+                    
+                    downloader.download_files_from_database(max_files=max_files, status_filter='pending', recent_days=recent_days, order_by="create_time DESC")
                     
                 elif choice == "8":
                     # 文件下载设置
@@ -1653,6 +1667,12 @@ def load_config():
 
 def main():
     """主函数"""
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='知识星球交互式数据采集器')
+    parser.add_argument('-d', '--auto-download', action='store_true',
+                        help='自动下载模式：按时间排序下载最近3天的文件，无需交互')
+    args = parser.parse_args()
+    
     # 加载配置信息
     config = load_config()
     if not config:
@@ -1678,8 +1698,30 @@ def main():
     # 创建交互式爬虫
     crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH)
     
-    # 运行交互界面
-    crawler.run_interactive()
+    # 如果是自动下载模式
+    if args.auto_download:
+        print("🤖 自动下载模式：按时间排序下载最近3天的文件")
+        print("=" * 60)
+        
+        # 获取文件下载器
+        downloader = crawler.get_file_downloader()
+        
+        print("🔄 按时间排序收集文件列表...")
+        downloader.collect_files_by_time()
+        
+        # 自动下载最近3天的文件
+        print("\n🚀 开始下载最近3天的文件...")
+        downloader.download_files_from_database(
+            max_files=None,
+            status_filter='pending',
+            recent_days=3,
+            order_by="create_time DESC"
+        )
+        
+        print("\n✅ 自动下载任务完成！")
+    else:
+        # 运行交互界面
+        crawler.run_interactive()
 
 
 if __name__ == "__main__":

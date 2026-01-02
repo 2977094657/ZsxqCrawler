@@ -892,12 +892,19 @@ class ZSXQFileDownloader:
             'time_based_count': result[2] if result else 0
         }
     
-    def collect_files_by_time(self, sort: str = "by_create_time", start_time: Optional[str] = None) -> Dict[str, int]:
+    def collect_files_by_time(self, sort: str = "by_create_time", start_time: Optional[str] = None, **kwargs) -> Dict[str, int]:
         """按时间顺序收集文件列表到数据库（使用完整的数据库结构）"""
         self.log(f"📊 开始按时间顺序收集文件列表到完整数据库...")
         self.log(f"   📅 排序方式: {sort}")
         if start_time:
             self.log(f"   ⏰ 起始时间: {start_time}")
+        
+        # 检查是否强制刷新
+        force_refresh = kwargs.get('force_refresh', False)
+        if force_refresh:
+            self.log(f"   🔄 强制刷新模式: 将收集所有文件（包括已存在的）")
+        elif sort == "by_create_time":
+            self.log(f"   ✅ 智能去重模式: 遇到已存在的文件将停止收集")
 
         # 检查是否需要停止
         if self.check_stop():
@@ -908,6 +915,18 @@ class ZSXQFileDownloader:
         initial_stats = self.file_db.get_database_stats()
         initial_files = initial_stats.get('files', 0)
         self.log(f"   📊 数据库初始状态: {initial_files} 个文件")
+        
+        # 如果是按时间排序且非强制刷新模式，获取数据库中最新文件的时间戳
+        db_latest_time = None
+        if sort == "by_create_time" and not force_refresh and initial_files > 0:
+            self.file_db.cursor.execute('''
+                SELECT MAX(create_time) FROM files 
+                WHERE create_time IS NOT NULL AND create_time != ''
+            ''')
+            result = self.file_db.cursor.fetchone()
+            if result and result[0]:
+                db_latest_time = result[0]
+                self.log(f"   📅 数据库最新文件时间: {db_latest_time}")
         
         total_imported_stats = {
             'files': 0, 'topics': 0, 'users': 0, 'groups': 0,
@@ -941,6 +960,32 @@ class ZSXQFileDownloader:
                     break
 
                 self.log(f"   📋 当前页面: {len(files)} 个文件")
+                
+                # 如果是按时间排序且非强制刷新模式，检查本页文件是否有新于数据库的
+                should_stop_after_insert = False
+                if sort == "by_create_time" and not force_refresh and db_latest_time:
+                    # 筛选出新于数据库的文件
+                    newer_files = [
+                        file_info for file_info in files
+                        if file_info.get('file', {}).get('create_time', '') > db_latest_time
+                    ]
+                    
+                    newer_count = len(newer_files)
+                    older_count = len(files) - newer_count
+                    
+                    self.log(f"   📊 时间分析: 新于数据库{newer_count}个, 旧于或等于数据库{older_count}个")
+                    
+                    # 如果整页文件都不新于数据库最新时间，说明后面的都是旧数据，停止收集
+                    if newer_count == 0:
+                        self.log(f"   ✅ 本页全部文件均已存在于数据库（时间不晚于数据库最新），停止收集")
+                        self.log(f"   💡 提示: 如需强制重新收集，请传入 force_refresh=True 参数")
+                        break
+                    
+                    # 如果有旧数据，只保留新数据，并标记插入后停止
+                    if older_count > 0:
+                        self.log(f"   🔄 过滤掉{older_count}个旧数据，只插入{newer_count}个新数据")
+                        data['resp_data']['files'] = newer_files
+                        should_stop_after_insert = True
 
                 # 使用完整数据库导入整个API响应
                 try:
@@ -951,6 +996,12 @@ class ZSXQFileDownloader:
                         total_imported_stats[key] += page_stats.get(key, 0)
 
                     self.log(f"   ✅ 第{page_count}页存储完成: 文件+{page_stats.get('files', 0)}, 话题+{page_stats.get('topics', 0)}")
+                    
+                    # 如果本页有旧数据，插入新数据后停止
+                    if should_stop_after_insert:
+                        self.log(f"   ✅ 已插入本页新数据，后续页面均为旧数据，停止收集")
+                        self.log(f"   💡 提示: 如需强制重新收集，请传入 force_refresh=True 参数")
+                        break
 
                 except Exception as e:
                     self.log(f"   ❌ 第{page_count}页存储失败: {e}")
@@ -1049,37 +1100,58 @@ class ZSXQFileDownloader:
             self.log("🔄 改为全量收集")
             return self.collect_files_by_time()
     
-    def download_files_from_database(self, max_files: Optional[int] = None, status_filter: str = 'pending') -> Dict[str, int]:
+    def download_files_from_database(self, max_files: Optional[int] = None, status_filter: str = 'pending', **kwargs) -> Dict[str, int]:
         """从完整数据库下载文件（使用file_id字段）"""
         self.log(f"📥 开始从完整数据库下载文件...")
         if max_files:
             self.log(f"   🎯 下载限制: {max_files}个文件")
         self.log(f"   🔍 状态筛选: {status_filter}")
+        recent_days = kwargs.get('recent_days')
+        if recent_days:
+            self.log(f"   📅 时间筛选: 最近{recent_days}天")
+        order_by = kwargs.get('order_by', 'create_time DESC')
+        self.log(f"   🔃 排序方式: {order_by}")
 
         # 检查是否需要停止
         if self.check_stop():
             self.log("🛑 任务被停止")
             return {'total_files': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0}
         
-        # 从完整数据库获取文件列表
+        # 构建查询条件
+        query_conditions = "download_status = ?"
+        query_params = [status_filter]
+        
+        # 如果指定了recent_days，添加时间筛选条件
+        if recent_days:
+            from datetime import datetime, timedelta
+            cutoff_date = (datetime.now() - timedelta(days=recent_days)).strftime('%Y-%m-%dT%H:%M:%S')
+            query_conditions += " AND create_time >= ?"
+            query_params.append(cutoff_date)
+        
+        # 从完整数据库获取文件列表（使用状态筛选和时间筛选）
         if max_files:
-            self.file_db.cursor.execute('''
+            query = f'''
                 SELECT file_id, name, size, download_count, create_time 
                 FROM files 
-                ORDER BY download_count DESC, size ASC 
+                WHERE {query_conditions}
+                ORDER BY {order_by}
                 LIMIT ?
-            ''', (max_files,))
+            '''
+            query_params.append(max_files)
+            self.file_db.cursor.execute(query, tuple(query_params))
         else:
-            self.file_db.cursor.execute('''
+            query = f'''
                 SELECT file_id, name, size, download_count, create_time 
                 FROM files 
-                ORDER BY download_count DESC, size ASC
-            ''')
+                WHERE {query_conditions}
+                ORDER BY {order_by}
+            '''
+            self.file_db.cursor.execute(query, tuple(query_params))
         
         files_to_download = self.file_db.cursor.fetchall()
         
         if not files_to_download:
-            self.log(f"📭 数据库中没有文件可下载")
+            self.log(f"📭 数据库中没有状态为 '{status_filter}' 的文件可下载")
             return {'total_files': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0}
 
         self.log(f"📋 找到 {len(files_to_download)} 个待下载文件")
@@ -1112,8 +1184,31 @@ class ZSXQFileDownloader:
                 if result == "skipped":
                     stats['skipped'] += 1
                     self.log(f"   ⚠️ 文件已跳过")
+                    # 更新数据库状态为已跳过
+                    self.file_db.cursor.execute('''
+                        UPDATE files 
+                        SET download_status = 'skipped',
+                            download_time = CURRENT_TIMESTAMP
+                        WHERE file_id = ?
+                    ''', (file_id,))
+                    self.file_db.conn.commit()
                 elif result:
                     stats['downloaded'] += 1
+                    # 更新数据库状态为已完成
+                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}')
+                    if not safe_filename:
+                        safe_filename = f"file_{file_id}"
+                    file_path = os.path.join(self.download_dir, safe_filename)
+                    
+                    self.file_db.cursor.execute('''
+                        UPDATE files 
+                        SET download_status = 'completed',
+                            local_path = ?,
+                            download_time = CURRENT_TIMESTAMP
+                        WHERE file_id = ?
+                    ''', (file_path, file_id))
+                    self.file_db.conn.commit()
+                    self.log(f"   ✅ 数据库状态已更新为: completed")
 
                     # 检查长休眠
                     self.check_long_delay()
@@ -1124,6 +1219,14 @@ class ZSXQFileDownloader:
                 else:
                     stats['failed'] += 1
                     self.log(f"   ❌ 下载失败")
+                    # 更新数据库状态为失败
+                    self.file_db.cursor.execute('''
+                        UPDATE files 
+                        SET download_status = 'failed',
+                            download_time = CURRENT_TIMESTAMP
+                        WHERE file_id = ?
+                    ''', (file_id,))
+                    self.file_db.conn.commit()
                 
             except KeyboardInterrupt:
                 self.log(f"⏹️ 用户中断下载")
