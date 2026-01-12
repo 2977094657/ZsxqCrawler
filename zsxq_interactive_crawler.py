@@ -28,7 +28,11 @@ except ImportError:
 class ZSXQInteractiveCrawler:
     """知识星球交互式数据采集器"""
     
-    def __init__(self, cookie: str, group_id: str, db_path: str = None, log_callback=None):
+    #def __init__(self, cookie: str, group_id: str, db_path: str = None, log_callback=None):
+    # wx_webhook 新增
+    def __init__(self, cookie: str, group_id: str, db_path: str = None, 
+             log_callback=None, wecom_webhook_url: str = None, 
+             wecom_enabled: bool = True):
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
         self.log_callback = log_callback  # 日志回调函数
@@ -46,6 +50,18 @@ class ZSXQInteractiveCrawler:
 
         # 文件下载器（懒加载）
         self.file_downloader = None
+        
+        # 初始化企业微信webhook
+        self.wecom_webhook = None
+        if wecom_webhook_url:
+            try:
+                from wecom_webhook import WeComWebhook
+                self.wecom_webhook = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled)
+                self.log("📱 企业微信Webhook已启用")
+            except ImportError:
+                self.log("⚠️ 未找到wecom_webhook模块，webhook推送功能不可用")
+            except Exception as e:
+                self.log(f"⚠️ 企业微信Webhook初始化失败: {e}")
 
         # 基础API配置
         self.base_url = "https://api.zsxq.com"
@@ -700,12 +716,33 @@ class ZSXQInteractiveCrawler:
         
         data = self.fetch_topics_safe(scope="all", count=count)
         if data:
+            # wx_push新增功能，在存入数据库前判断新增内容
+            topics = data.get('resp_data', {}).get('topics', [])
+            
+            # ✅ 在存储前识别新增话题
+            new_topics = []
+            for topic in topics:
+                topic_id = topic.get('topic_id')
+                self.db.cursor.execute('SELECT topic_id FROM topics WHERE topic_id = ?', (topic_id,))
+                if not self.db.cursor.fetchone():
+                    new_topics.append(topic)
+            
+            # 存储数据
             stats = self.store_batch_data(data)
             self.log(f"💾 存储结果: 新增{stats['new_topics']}, 更新{stats['updated_topics']}")
-            return stats
-        else:
-            print("❌ 获取失败")
-            return {'new_topics': 0, 'updated_topics': 0, 'errors': 1}
+            
+            # 企业微信推送
+            if self.wecom_webhook and new_topics:  # ✅ 使用new_topics列表判断
+                self.log(f"📱 准备推送企业微信通知，共{len(new_topics)}个新话题...")
+                success = self.wecom_webhook.send_new_topics_notification(new_topics, stats)
+                if success:
+                    self.log("✅ 企业微信推送成功")
+                else:
+                    self.log("⚠️ 企业微信推送失败")
+                return stats
+            else:
+                print("❌ 获取失败")
+                return {'new_topics': 0, 'updated_topics': 0, 'errors': 1}
     
     def crawl_historical(self, pages: int = 10, per_page: int = 20) -> Dict[str, int]:
         """爬取历史数据"""
@@ -1239,6 +1276,9 @@ class ZSXQInteractiveCrawler:
         current_page = 0
         max_retries_per_page = 10
         
+        # ✅ 添加：记录所有新增话题
+        all_new_topics = []
+        
         while True:
             # 检查停止标志
             if self.is_stopped():
@@ -1306,12 +1346,27 @@ class ZSXQInteractiveCrawler:
                             print(f"   话题总数: {final_db_stats['total_topics']} (+{final_db_stats['total_topics'] - timestamp_info['total_topics']})")
                             print(f"   时间范围: {final_db_stats['oldest_timestamp']} ~ {final_db_stats['newest_timestamp']}")
                         
+                         # ✅ 添加：企业微信推送（在返回前）
+                        if self.wecom_webhook and all_new_topics:
+                            self.log(f"📱 准备推送企业微信通知，共{len(all_new_topics)}个新话题...")
+                            success = self.wecom_webhook.send_new_topics_notification(all_new_topics, total_stats)
+                            if success:
+                                self.log("✅ 企业微信推送成功")
+                            else:
+                                self.log("⚠️ 企业微信推送失败")
+                                
                         return total_stats
                     
                     elif existing_count == 0:
                         # 整页话题都是新的，全部存储
                         page_stats = self.store_batch_data(data)
                         print(f"   💾 整页存储: 新增{page_stats['new_topics']}, 更新{page_stats['updated_topics']}")
+
+                         # ✅ 添加：记录新增话题（在存储前记录）
+                        # 注意：这里需要重新查询，因为store_batch_data已经存储了
+                        # 更好的方式是在store_batch_data之前记录
+                        # 但为了保持代码结构，我们使用new_topics_list
+                        all_new_topics.extend(new_topics_list)
                     
                     else:
                         # 部分话题是新的，只存储新话题
@@ -1340,6 +1395,9 @@ class ZSXQInteractiveCrawler:
                         # 提交事务
                         self.db.conn.commit()
                         print(f"   💾 新话题存储: 新增{new_topics_count}, 更新{updated_topics_count}")
+                        
+                        # ✅ 添加：记录新增话题
+                        all_new_topics.extend(new_topics_list)
                         
                         # 更新统计
                         total_stats['new_topics'] += new_topics_count
@@ -1408,7 +1466,7 @@ class ZSXQInteractiveCrawler:
             else:
                 # 页面成功处理后进行长休眠检查（基于页面数而非请求数）
                 self.check_page_long_delay()
-        
+                
         return total_stats
     
     def show_menu(self):
@@ -1681,11 +1739,17 @@ def main():
     # 从TOML配置中获取值
     auth_config = config.get('auth', {})
     db_config = config.get('database', {})
+    # wx_webhook 新增
+    wecom_config = config.get('wecom_webhook', {})
     
     COOKIE = auth_config.get('cookie', 'your_cookie_here')
     GROUP_ID = auth_config.get('group_id', 'your_group_id_here')
     # 数据库路径改为可选；如未配置则由路径管理器自动管理
     DB_PATH = db_config.get('path') if isinstance(db_config, dict) else None
+    
+     # 企业微信webhook配置-新增
+    wecom_webhook_url = wecom_config.get('webhook_url') if isinstance(wecom_config, dict) else None
+    wecom_enabled = wecom_config.get('enabled', True) if isinstance(wecom_config, dict) else True
     
     # 检查配置是否已修改
     if COOKIE == "your_cookie_here" or not COOKIE:
@@ -1695,8 +1759,10 @@ def main():
         print("⚠️ 交互式命令行模式仍需手动指定单个群组ID，请在 config.toml 中添加 [auth].group_id")
         return
     
-    # 创建交互式爬虫
-    crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH)
+    # 创建交互式爬虫-新增修改
+    #crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH)
+    crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH,wecom_webhook_url=wecom_webhook_url,
+        wecom_enabled=wecom_enabled)
     
     # 如果是自动下载模式
     if args.auto_download:

@@ -1637,8 +1637,30 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
-
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                
+                # wx_push新增修改
+                #crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                
+                # ✅ 添加：读取企业微信webhook配置
+                config = load_config()
+                wecom_webhook_url = None
+                wecom_enabled = True
+                if config:
+                    wecom_config = config.get('wecom_webhook', {})
+                    if isinstance(wecom_config, dict):
+                        wecom_webhook_url = wecom_config.get('webhook_url')
+                        wecom_enabled = wecom_config.get('enabled', True)
+                
+                # ✅ 修改：传递webhook参数
+                crawler = ZSXQInteractiveCrawler(
+                    cookie, 
+                    group_id, 
+                    db_path, 
+                    log_callback,
+                    wecom_webhook_url=wecom_webhook_url,
+                    wecom_enabled=wecom_enabled
+                )
+        
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
