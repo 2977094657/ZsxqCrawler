@@ -1044,9 +1044,9 @@ def run_file_download_task(task_id: str, group_id: str, max_files: Optional[int]
 
         # 根据排序方式下载文件
         if sort_by == "download_count":
-            result = downloader.download_files_from_database(max_files=max_files, status_filter='pending')
+            result = downloader.download_files_from_database(max_files=max_files, status_filter='pending',order_by='download_count DESC')
         else:
-            result = downloader.download_files_from_database(max_files=max_files, status_filter='pending')
+            result = downloader.download_files_from_database(max_files=max_files, status_filter='pending',order_by='create_time DESC')
 
         # 检查任务是否被停止
         if is_task_stopped(task_id):
