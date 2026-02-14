@@ -4,27 +4,50 @@
 import os
 from typing import Dict, Any
 
+_DEFAULT_CONFIG_TOML = """# 知识星球数据采集器配置文件
+# 首次启动自动生成；请按需修改
+
+[auth]
+# 知识星球登录 Cookie（Web 模式可留空，推荐使用“账号管理”配置）
+cookie = "your_cookie_here"
+# 交互式命令行模式需要单个群组ID；Web 模式可留空
+group_id = "your_group_id_here"
+
+[download]
+# 下载目录
+dir = "downloads"
+
+[database]
+# 可选：自定义数据库路径；留空则由路径管理器自动管理
+# path = ""
+"""
+
+
 class DatabasePathManager:
     """数据库路径管理器 - 统一管理所有数据库文件的存储位置"""
     
     def __init__(self, base_dir: str = "output/databases"):
+        # 以代码所在目录作为项目根目录（避免因缺少 config.toml 而一路向上走到文件系统根目录）
+        self.project_root = os.path.abspath(os.path.dirname(__file__))
+        self._ensure_config_toml()
+
         # 确保使用项目根目录的绝对路径
-        if not os.path.isabs(base_dir):
-            # 查找项目根目录（包含config.toml的目录）
-            current_dir = os.path.abspath(os.getcwd())
-            project_root = current_dir
-
-            # 向上查找包含config.toml的目录
-            while project_root != os.path.dirname(project_root):
-                if os.path.exists(os.path.join(project_root, "config.toml")):
-                    break
-                project_root = os.path.dirname(project_root)
-
-            self.base_dir = os.path.join(project_root, base_dir)
-        else:
-            self.base_dir = base_dir
+        self.base_dir = base_dir if os.path.isabs(base_dir) else os.path.join(self.project_root, base_dir)
 
         self._ensure_base_dir()
+
+    def _ensure_config_toml(self) -> None:
+        """确保 config.toml 存在（不存在则创建默认模板）。"""
+        config_path = os.path.join(self.project_root, "config.toml")
+        if os.path.exists(config_path):
+            return
+
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write(_DEFAULT_CONFIG_TOML)
+        except Exception as e:
+            # 不能因为写配置失败导致程序无法启动；后续 load_config 会给出提示
+            print(f"⚠️ 无法自动创建 config.toml: {e}")
     
     def _ensure_base_dir(self):
         """确保基础目录存在"""
