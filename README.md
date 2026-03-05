@@ -121,6 +121,25 @@ uv run zsxq_interactive_crawler.py
 
 > 提示：当前版本不会将文章导出为 Markdown/HTML 文件，**文章内容都存储在话题数据库中**；若需要再导出为文件，可以后续通过数据库二次处理实现。
 
+## 赞助与支持
+
+如果本项目对你有帮助，欢迎通过以下方式赞助。付款时请在备注中填写“希望公开展示的链接”（如个人主页、GitHub 仓库等），我们会在 README 的“赞助鸣谢”表格中展示。
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <img src="https://github.com/LifeArchiveProject/BilibiliHistoryFetcher/raw/master/public/wechat.png" alt="微信收款码" width="220"><br>
+        微信赞助
+      </td>
+      <td align="center">
+        <img src="https://github.com/LifeArchiveProject/BilibiliHistoryFetcher/raw/master/public/zfb.jpg" alt="支付宝收款码" width="220"><br>
+        支付宝赞助
+      </td>
+    </tr>
+  </table>
+</div>
+
 ## 贡献指南
 
 欢迎提交Issue和Pull Request！
