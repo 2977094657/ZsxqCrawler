@@ -143,7 +143,8 @@ uv run zsxq_interactive_crawler.py
 | 联系内容                                              | 付款金额 |
 | ----------------------------------------------------- | -------- |
 | https://github.com/yankai19900930 | ￥28.88      |
-| https://github.com/freejacklee | ￥3
+| https://github.com/freejacklee | ￥3 |
+| 匿名用户 | ￥88.88 |
 
 提示：已赞助但未收录，请在 Issues 提交凭证与备注链接；如需匿名可说明。
 
