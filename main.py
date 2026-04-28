@@ -14,12 +14,13 @@ import requests
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, FileResponse
 from pydantic import BaseModel, Field
 import uvicorn
 import mimetypes
 import random
 import time
+from urllib.parse import urlparse
 
 # 添加项目根目录到Python路径（现在main.py就在根目录）
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +38,14 @@ from accounts_sql_manager import get_accounts_sql_manager
 from account_info_db import get_account_info_db
 from zsxq_columns_database import ZSXQColumnsDatabase
 from logger_config import log_info, log_warning, log_error, log_exception, log_debug, ensure_configured
+from zsxq_markdown_exporter import (
+    article_html_to_markdown,
+    column_topic_detail_to_markdown,
+    safe_filename,
+    topic_detail_to_markdown,
+    write_temp_markdown_file,
+    write_temp_topic_archive,
+)
 
 # 初始化日志系统
 ensure_configured()
@@ -541,9 +550,23 @@ async def create_account(request: AccountCreateRequest):
     try:
         sql_mgr = get_accounts_sql_manager()
         acc = sql_mgr.add_account(request.cookie, request.name)
-        safe_acc = sql_mgr.get_account_by_id(acc.get("id"), mask_cookie=True)
+        new_id = acc.get("id")
+        safe_acc = sql_mgr.get_account_by_id(new_id, mask_cookie=True)
         # 清除账号群组检测缓存，使新账号的群组立即可见
         clear_account_detect_cache()
+
+        # 后台异步抓取该账号的 self 信息并落库（不阻塞响应）
+        if new_id and request.cookie:
+            try:
+                import threading
+                threading.Thread(
+                    target=_fetch_and_store_account_self,
+                    args=(new_id, request.cookie),
+                    daemon=True,
+                ).start()
+            except Exception as e:
+                print(f"⚠️ 启动后台抓取账号 self 信息失败: {e}")
+
         return {"account": safe_acc}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create account: {str(e)}")
@@ -587,31 +610,17 @@ async def get_group_account(group_id: str):
         raise HTTPException(status_code=500, detail=f"获取群组账号失败: {str(e)}")
 
 # 账号“自我信息”持久化 (/v3/users/self)
-@app.get("/api/accounts/{account_id}/self")
-async def get_account_self(account_id: str):
-    """获取并返回指定账号的已持久化自我信息；若无则尝试抓取并保存"""
+def _fetch_and_store_account_self(account_id: str, cookie: str) -> Optional[Dict[str, Any]]:
+    """同步抓取 /v3/users/self 并写入数据库；失败时返回 None。供后台线程或 to_thread 调用。"""
     try:
-        db = get_account_info_db()
-        info = db.get_self_info(account_id)
-        if info:
-            return {"self": info}
-
-        # 若数据库无记录则抓取
-        sql_mgr = get_accounts_sql_manager()
-        acc = sql_mgr.get_account_by_id(account_id, mask_cookie=False)
-        if not acc:
-            raise HTTPException(status_code=404, detail="Account does not exist")
-
-        cookie = acc.get("cookie", "")
         if not cookie:
-            raise HTTPException(status_code=400, detail="Account has no configured Cookie")
-
+            return None
         headers = build_stealth_headers(cookie)
         resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         if not data.get('succeeded'):
-            raise HTTPException(status_code=400, detail="API returned failure")
+            return None
 
         rd = data.get('resp_data', {}) or {}
         user = rd.get('user', {}) or {}
@@ -625,18 +634,30 @@ async def get_account_self(account_id: str):
             "user_sid": user.get("user_sid"),
             "grade": user.get("grade"),
         }
+        db = get_account_info_db()
         db.upsert_self_info(account_id, self_info, raw_json=data)
-        return {"self": db.get_self_info(account_id)}
-    except HTTPException:
-        raise
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Network request failed: {str(e)}")
+        return db.get_self_info(account_id)
+    except Exception as e:
+        print(f"⚠️ 抓取账号 {account_id} self 信息失败: {e}")
+        return None
+
+
+@app.get("/api/accounts/{account_id}/self")
+async def get_account_self(account_id: str):
+    """仅返回数据库中已持久化的账号自我信息；若无则返回 None（请前端调用 refresh 主动刷新）。
+
+    注意：此端点必须保持只读且快速，否则会阻塞 FastAPI 事件循环并拖慢账号管理页切换。
+    """
+    try:
+        db = get_account_info_db()
+        info = db.get_self_info(account_id)
+        return {"self": info}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve account info: {str(e)}")
 
 @app.post("/api/accounts/{account_id}/self/refresh")
 async def refresh_account_self(account_id: str):
-    """强制抓取 /v3/users/self 并更新持久化"""
+    """强制抓取 /v3/users/self 并更新持久化（在线程池执行，不阻塞事件循环）"""
     try:
         sql_mgr = get_accounts_sql_manager()
         acc = sql_mgr.get_account_by_id(account_id, mask_cookie=False)
@@ -647,83 +668,33 @@ async def refresh_account_self(account_id: str):
         if not cookie:
             raise HTTPException(status_code=400, detail="Account has no configured Cookie")
 
-        headers = build_stealth_headers(cookie)
-        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get('succeeded'):
-            raise HTTPException(status_code=400, detail="API returned failure")
-
-        rd = data.get('resp_data', {}) or {}
-        user = rd.get('user', {}) or {}
-        wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
-
-        self_info = {
-            "uid": user.get("uid"),
-            "name": user.get("name") or wechat.get("name"),
-            "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
-            "location": user.get("location"),
-            "user_sid": user.get("user_sid"),
-            "grade": user.get("grade"),
-        }
-        db = get_account_info_db()
-        db.upsert_self_info(account_id, self_info, raw_json=data)
-        return {"self": db.get_self_info(account_id)}
+        info = await asyncio.to_thread(_fetch_and_store_account_self, account_id, cookie)
+        if info is None:
+            raise HTTPException(status_code=502, detail="抓取或解析 /v3/users/self 失败")
+        return {"self": info}
     except HTTPException:
         raise
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Network request failed: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to refresh account info: {str(e)}")
 
 @app.get("/api/groups/{group_id}/self")
 async def get_group_account_self(group_id: str):
-    """获取群组当前使用账号的自我信息（若无则尝试抓取并保存）"""
+    """仅返回群组当前使用账号的已持久化自我信息；若无则返回 None。
+
+    注意：此端点只读，不会主动抓取 zsxq API，避免阻塞事件循环。
+    """
     try:
         summary = get_account_summary_for_group_auto(group_id)
-        cookie = get_cookie_for_group(group_id)
         account_id = (summary or {}).get('id', 'default')
-
-        if not cookie:
-            raise HTTPException(status_code=400, detail="未找到可用Cookie，请先配置账号或默认Cookie")
-
         db = get_account_info_db()
         info = db.get_self_info(account_id)
-        if info:
-            return {"self": info}
-
-        # 抓取并写入
-        headers = build_stealth_headers(cookie)
-        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get('succeeded'):
-            raise HTTPException(status_code=400, detail="API返回失败")
-
-        rd = data.get('resp_data', {}) or {}
-        user = rd.get('user', {}) or {}
-        wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
-
-        self_info = {
-            "uid": user.get("uid"),
-            "name": user.get("name") or wechat.get("name"),
-            "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
-            "location": user.get("location"),
-            "user_sid": user.get("user_sid"),
-            "grade": user.get("grade"),
-        }
-        db.upsert_self_info(account_id, self_info, raw_json=data)
-        return {"self": db.get_self_info(account_id)}
-    except HTTPException:
-        raise
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+        return {"self": info}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取群组账号信息失败: {str(e)}")
 
 @app.post("/api/groups/{group_id}/self/refresh")
 async def refresh_group_account_self(group_id: str):
-    """强制抓取群组当前使用账号的自我信息并持久化"""
+    """强制抓取群组当前使用账号的自我信息并持久化（在线程池执行，不阻塞事件循环）"""
     try:
         summary = get_account_summary_for_group_auto(group_id)
         cookie = get_cookie_for_group(group_id)
@@ -732,32 +703,12 @@ async def refresh_group_account_self(group_id: str):
         if not cookie:
             raise HTTPException(status_code=400, detail="未找到可用Cookie，请先配置账号或默认Cookie")
 
-        headers = build_stealth_headers(cookie)
-        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get('succeeded'):
-            raise HTTPException(status_code=400, detail="API返回失败")
-
-        rd = data.get('resp_data', {}) or {}
-        user = rd.get('user', {}) or {}
-        wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
-
-        self_info = {
-            "uid": user.get("uid"),
-            "name": user.get("name") or wechat.get("name"),
-            "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
-            "location": user.get("location"),
-            "user_sid": user.get("user_sid"),
-            "grade": user.get("grade"),
-        }
-        db = get_account_info_db()
-        db.upsert_self_info(account_id, self_info, raw_json=data)
-        return {"self": db.get_self_info(account_id)}
+        info = await asyncio.to_thread(_fetch_and_store_account_self, account_id, cookie)
+        if info is None:
+            raise HTTPException(status_code=502, detail="抓取或解析 /v3/users/self 失败")
+        return {"self": info}
     except HTTPException:
         raise
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"刷新群组账号信息失败: {str(e)}")
 
@@ -2494,6 +2445,135 @@ async def get_topic_detail(topic_id: int, group_id: str):
         # 只有真正的非 HTTPException 异常才包装为 500
         raise HTTPException(status_code=500, detail=f"获取话题详情失败: {str(e)}")
 
+def _download_markdown_response(markdown: str, filename_stem: str):
+    """Build a Markdown file download response."""
+    file_path = write_temp_markdown_file(markdown, filename_stem)
+    filename = f"{safe_filename(filename_stem)}.md"
+    return FileResponse(
+        file_path,
+        media_type="text/markdown; charset=utf-8",
+        filename=filename,
+    )
+
+
+def _topic_image_downloader(group_id: str):
+    """构建用于 ZIP 归档的图片下载回调。
+
+    优先使用 image_cache_manager 的本地缓存（避免重复下载）；缓存未命中时主动下载。
+    返回的 callable 接收 url，返回本地图片路径或 None。
+    """
+    cache_manager = get_image_cache_manager(group_id)
+
+    def _download(url: str):
+        if not url:
+            return None
+        try:
+            success, path, _err = cache_manager.download_and_cache(url, timeout=20)
+            if success and path:
+                return path
+        except Exception as e:
+            log_warning(f"导出 ZIP 时下载图片失败: url={url}, error={e}")
+        return None
+
+    return _download
+
+
+def _download_topic_archive_response(detail: Dict[str, Any], filename_stem: str,
+                                      *, group_id: str,
+                                      render=topic_detail_to_markdown,
+                                      render_kwargs: Optional[Dict[str, Any]] = None):
+    """Build a ZIP download response containing Markdown + assets/."""
+    file_path = write_temp_topic_archive(
+        detail,
+        filename_stem,
+        render=render,
+        render_kwargs=render_kwargs,
+        image_downloader=_topic_image_downloader(group_id),
+    )
+    filename = f"{safe_filename(filename_stem)}.zip"
+    return FileResponse(
+        file_path,
+        media_type="application/zip",
+        filename=filename,
+    )
+
+
+def _fetch_article_markdown(article_url: str, headers: Dict[str, str], fallback_title: str) -> str:
+    """Fetch article_url and convert the returned HTML to Markdown when possible."""
+    if not article_url:
+        return ""
+
+    parsed = urlparse(article_url)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+
+    try:
+        response = requests.get(article_url, headers=headers, timeout=30, allow_redirects=True)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        if "json" in content_type:
+            return ""
+        response.encoding = response.encoding or "utf-8"
+        return article_html_to_markdown(response.text, fallback_title=fallback_title)
+    except Exception as e:
+        log_warning(f"Failed to export article_url as Markdown: url={article_url}, error={e}")
+        return ""
+
+
+@app.get("/api/topics/{topic_id}/{group_id}/export-md")
+async def export_topic_markdown(topic_id: int, group_id: str,
+                                fetch_article: bool = True,
+                                format: str = "zip"):
+    """导出话题为 Markdown 单文件或包含资源的 ZIP 归档。
+
+    - format=zip（默认）：返回 README.md + assets/ 目录的 zip 包，含头像与图片，离线可读
+    - format=md：返回单个 .md 文件（图片用远程 URL）
+    """
+    try:
+        crawler = get_crawler_for_group(group_id)
+        topic_detail = crawler.db.get_topic_detail(topic_id)
+
+        if not topic_detail:
+            raise HTTPException(status_code=404, detail="Topic not found")
+
+        article = ((topic_detail.get("talk") or {}).get("article") or {})
+        article_url = article.get("article_url") or article.get("inline_article_url") or ""
+        title = topic_detail.get("title") or article.get("title") or f"topic_{topic_id}"
+
+        # 仅当导出格式为 md 且明确请求拉取外部文章时，才尝试外站抓取
+        external_article_md = ""
+        if format == "md" and fetch_article and article_url:
+            external_article_md = await asyncio.to_thread(
+                _fetch_article_markdown,
+                article_url,
+                crawler.get_stealth_headers(),
+                title,
+            )
+
+        if format == "zip":
+            return _download_topic_archive_response(
+                topic_detail,
+                f"{topic_id}_{title}",
+                group_id=group_id,
+                render=topic_detail_to_markdown,
+                render_kwargs={"source_url": article_url or None},
+            )
+
+        # 单 .md 模式
+        if external_article_md:
+            markdown = external_article_md.rstrip() + (
+                f"\n\n---\n\nSource: [{article.get('title') or article_url}]({article_url})\n"
+            )
+        else:
+            markdown = topic_detail_to_markdown(topic_detail, source_url=article_url or None)
+
+        return _download_markdown_response(markdown, f"{topic_id}_{title}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export Markdown failed: {str(e)}")
+
+
 @app.post("/api/topics/{topic_id}/{group_id}/refresh")
 async def refresh_topic(topic_id: int, group_id: str):
     """实时更新单个话题信息"""
@@ -3169,53 +3249,57 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
 async def get_group_stats(group_id: int):
     """获取指定群组的统计信息"""
     try:
-        # 使用指定群组的爬虫实例
-        crawler = get_crawler_for_group(str(group_id))
-        cursor = crawler.db.cursor
+        path_manager = get_db_path_manager()
+        db_path = path_manager.get_topics_db_path(str(group_id))
+        db = ZSXQDatabase(db_path)
+        cursor = db.cursor
 
-        # 获取话题统计
-        cursor.execute("SELECT COUNT(*) FROM topics WHERE group_id = ?", (group_id,))
-        topics_count = cursor.fetchone()[0]
+        try:
+            # 获取话题统计
+            cursor.execute("SELECT COUNT(*) FROM topics WHERE group_id = ?", (group_id,))
+            topics_count = cursor.fetchone()[0]
 
-        # 获取用户统计 - 从talks表获取，因为topics表没有user_id字段
-        cursor.execute("""
-            SELECT COUNT(DISTINCT t.owner_user_id)
-            FROM talks t
-            JOIN topics tp ON t.topic_id = tp.topic_id
-            WHERE tp.group_id = ?
-        """, (group_id,))
-        users_count = cursor.fetchone()[0]
+            # 获取用户统计 - 从talks表获取，因为topics表没有user_id字段
+            cursor.execute("""
+                SELECT COUNT(DISTINCT t.owner_user_id)
+                FROM talks t
+                JOIN topics tp ON t.topic_id = tp.topic_id
+                WHERE tp.group_id = ?
+            """, (group_id,))
+            users_count = cursor.fetchone()[0]
 
-        # 获取最新话题时间
-        cursor.execute("SELECT MAX(create_time) FROM topics WHERE group_id = ?", (group_id,))
-        latest_topic_time = cursor.fetchone()[0]
+            # 获取最新话题时间
+            cursor.execute("SELECT MAX(create_time) FROM topics WHERE group_id = ?", (group_id,))
+            latest_topic_time = cursor.fetchone()[0]
 
-        # 获取最早话题时间
-        cursor.execute("SELECT MIN(create_time) FROM topics WHERE group_id = ?", (group_id,))
-        earliest_topic_time = cursor.fetchone()[0]
+            # 获取最早话题时间
+            cursor.execute("SELECT MIN(create_time) FROM topics WHERE group_id = ?", (group_id,))
+            earliest_topic_time = cursor.fetchone()[0]
 
-        # 获取总点赞数
-        cursor.execute("SELECT SUM(likes_count) FROM topics WHERE group_id = ?", (group_id,))
-        total_likes = cursor.fetchone()[0] or 0
+            # 获取总点赞数
+            cursor.execute("SELECT SUM(likes_count) FROM topics WHERE group_id = ?", (group_id,))
+            total_likes = cursor.fetchone()[0] or 0
 
-        # 获取总评论数
-        cursor.execute("SELECT SUM(comments_count) FROM topics WHERE group_id = ?", (group_id,))
-        total_comments = cursor.fetchone()[0] or 0
+            # 获取总评论数
+            cursor.execute("SELECT SUM(comments_count) FROM topics WHERE group_id = ?", (group_id,))
+            total_comments = cursor.fetchone()[0] or 0
 
-        # 获取总阅读数
-        cursor.execute("SELECT SUM(reading_count) FROM topics WHERE group_id = ?", (group_id,))
-        total_readings = cursor.fetchone()[0] or 0
+            # 获取总阅读数
+            cursor.execute("SELECT SUM(reading_count) FROM topics WHERE group_id = ?", (group_id,))
+            total_readings = cursor.fetchone()[0] or 0
 
-        return {
-            "group_id": group_id,
-            "topics_count": topics_count,
-            "users_count": users_count,
-            "latest_topic_time": latest_topic_time,
-            "earliest_topic_time": earliest_topic_time,
-            "total_likes": total_likes,
-            "total_comments": total_comments,
-            "total_readings": total_readings
-        }
+            return {
+                "group_id": group_id,
+                "topics_count": topics_count,
+                "users_count": users_count,
+                "latest_topic_time": latest_topic_time,
+                "earliest_topic_time": earliest_topic_time,
+                "total_likes": total_likes,
+                "total_comments": total_comments,
+                "total_readings": total_readings
+            }
+        finally:
+            db.close()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取群组统计失败: {str(e)}")
 
@@ -4071,6 +4155,71 @@ async def get_column_topic_detail(group_id: str, topic_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取文章详情失败: {str(e)}")
+
+
+def _hydrate_column_topic_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+    """Hydrate Q&A/talk fields for column topic export."""
+    if detail.get('raw_json'):
+        try:
+            raw_data = json.loads(detail['raw_json'])
+            topic_type = raw_data.get('type', '')
+
+            if topic_type == 'q&a':
+                question = raw_data.get('question', {})
+                answer = raw_data.get('answer', {})
+                detail['question'] = {
+                    'text': question.get('text', ''),
+                    'owner': question.get('owner'),
+                    'images': question.get('images', []),
+                }
+                detail['answer'] = {
+                    'text': answer.get('text', ''),
+                    'owner': answer.get('owner'),
+                    'images': answer.get('images', []),
+                }
+                if not detail.get('full_text') and answer.get('text'):
+                    detail['full_text'] = answer.get('text', '')
+            elif topic_type == 'talk':
+                talk = raw_data.get('talk', {})
+                if not detail.get('full_text') and talk.get('text'):
+                    detail['full_text'] = talk.get('text', '')
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return detail
+
+
+@app.get("/api/groups/{group_id}/columns/topics/{topic_id}/export-md")
+async def export_column_topic_markdown(group_id: str, topic_id: int, format: str = "zip"):
+    """导出专栏文章为 Markdown 单文件或包含资源的 ZIP 归档。
+
+    - format=zip（默认）：返回 README.md + assets/ 目录的 zip 包，含头像与图片
+    - format=md：返回单个 .md 文件（图片用远程 URL）
+    """
+    try:
+        db = get_columns_db(group_id)
+        detail = db.get_topic_detail(topic_id)
+        db.close()
+
+        if not detail:
+            raise HTTPException(status_code=404, detail="Column topic detail not found")
+
+        detail = _hydrate_column_topic_detail(detail)
+        title = detail.get("title") or f"topic_{topic_id}"
+
+        if format == "zip":
+            return _download_topic_archive_response(
+                detail,
+                f"{topic_id}_{title}",
+                group_id=group_id,
+                render=column_topic_detail_to_markdown,
+            )
+
+        markdown = column_topic_detail_to_markdown(detail)
+        return _download_markdown_response(markdown, f"{topic_id}_{title}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export Markdown failed: {str(e)}")
 
 
 @app.post("/api/groups/{group_id}/columns/fetch")

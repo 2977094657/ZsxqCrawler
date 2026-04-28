@@ -287,7 +287,22 @@ class ApiClient {
     });
   }
 
-  // 删除单个话题
+  // 导出话题为 Markdown：默认 zip（含 assets/ 头像与图片，离线可读）；
+  // 传 format='md' 可降级为单文件 .md。
+  getTopicMarkdownExportUrl(
+    topicId: number | string,
+    groupId: number | string,
+    fetchArticle: boolean = true,
+    format: 'zip' | 'md' = 'zip',
+  ): string {
+    const id = String(topicId);
+    const params = new URLSearchParams({
+      fetch_article: fetchArticle ? 'true' : 'false',
+      format,
+    });
+    return `${this.baseUrl}/api/topics/${id}/${groupId}/export-md?${params.toString()}`;
+  }
+
   async deleteSingleTopic(groupId: number | string, topicId: number | string) {
     return this.request(`/api/topics/${topicId}/${groupId}`, {
       method: 'DELETE',
@@ -691,7 +706,16 @@ class ApiClient {
     return this.request(`/api/groups/${groupId}/columns/topics/${topicId}`);
   }
 
-  // 获取专栏文章完整评论
+  // 导出专栏文章为 Markdown：默认 zip（含 assets/ 头像与图片，离线可读）。
+  getColumnTopicMarkdownExportUrl(
+    groupId: number | string,
+    topicId: number | string,
+    format: 'zip' | 'md' = 'zip',
+  ): string {
+    const params = new URLSearchParams({ format });
+    return `${this.baseUrl}/api/groups/${groupId}/columns/topics/${topicId}/export-md?${params.toString()}`;
+  }
+
   async getColumnTopicFullComments(groupId: number | string, topicId: number): Promise<{
     success: boolean;
     comments: ColumnComment[];

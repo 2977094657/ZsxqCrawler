@@ -119,7 +119,6 @@ uv run zsxq_interactive_crawler.py
 - **图片缓存（可安全删除）**: `output/databases/{group_id}/images/`  
   - 用于话题图片预览的本地缓存，如被删除，后续访问时会自动重新生成。
 
-> 提示：当前版本不会将文章导出为 Markdown/HTML 文件，**文章内容都存储在话题数据库中**；若需要再导出为文件，可以后续通过数据库二次处理实现。
 
 ## 贡献指南
 
