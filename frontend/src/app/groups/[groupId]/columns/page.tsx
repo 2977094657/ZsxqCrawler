@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { 
   ArrowLeft, BookOpen, FileText, Download, RefreshCw, 
   ChevronRight, File, FileImage, Clock, Heart, MessageCircle,
-  Users, FolderOpen, Play, Settings, Trash2
+  Users, FolderOpen, Play, Settings, Trash2, Loader2
 } from 'lucide-react';
 import { apiClient, ColumnInfo, ColumnTopic, ColumnTopicDetail, ColumnsStats, ColumnsFetchSettings } from '@/lib/api';
 import { toast } from 'sonner';
@@ -414,6 +414,18 @@ export default function ColumnsPage() {
           </h1>
 
           {/* 作者和时间 */}
+          <div className="flex justify-end mb-4">
+            <Button asChild variant="outline" size="sm">
+              <a
+                href={apiClient.getColumnTopicMarkdownExportUrl(groupId, selectedTopic.topic_id)}
+                title="导出为 ZIP 包（含 Markdown + 图片）"
+              >
+                <Download className="h-4 w-4 mr-1" />
+                ZIP
+              </a>
+            </Button>
+          </div>
+
           <div className="flex items-center gap-4 mb-6 pb-4 border-b border-gray-200">
             {selectedTopic.owner && (
               <div className="flex items-center gap-2">
@@ -474,7 +486,7 @@ export default function ColumnsPage() {
                   {selectedTopic.question.images && selectedTopic.question.images.length > 0 && (
                     <div className="mt-3">
                       <ImageGallery
-                        images={selectedTopic.question.images}
+                        images={selectedTopic.question.images as any}
                         size="small"
                         groupId={groupId}
                       />
@@ -494,7 +506,7 @@ export default function ColumnsPage() {
                   {selectedTopic.answer.images && selectedTopic.answer.images.length > 0 && (
                     <div className="mt-3">
                       <ImageGallery
-                        images={selectedTopic.answer.images}
+                        images={selectedTopic.answer.images as any}
                         size="small"
                         groupId={groupId}
                       />
@@ -749,7 +761,7 @@ export default function ColumnsPage() {
                     {comment.images && comment.images.length > 0 && (
                       <div className="ml-6 mt-2">
                         <ImageGallery
-                          images={comment.images}
+                          images={comment.images as any}
                           className="comment-images"
                           size="small"
                           groupId={groupId}
@@ -798,7 +810,7 @@ export default function ColumnsPage() {
                             {reply.images && reply.images.length > 0 && (
                               <div className="ml-5 mt-1">
                                 <ImageGallery
-                                  images={reply.images}
+                                  images={reply.images as any}
                                   className="reply-images"
                                   size="small"
                                   groupId={groupId}
@@ -821,8 +833,12 @@ export default function ColumnsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-500">加载中...</div>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3 px-6 py-5 rounded-xl border border-border bg-card shadow-sm">
+          <Loader2 className="h-8 w-8 animate-spin text-amber-600" />
+          <div className="text-sm font-medium text-foreground">正在加载专栏数据</div>
+          <div className="text-xs text-muted-foreground">首次进入会拉取专栏列表与统计，请稍候…</div>
+        </div>
       </div>
     );
   }
@@ -937,7 +953,7 @@ export default function ColumnsPage() {
                     <Label className="text-sm font-medium">请求间隔 (秒)</Label>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <Label className="text-xs text-gray-500">最小</Label>
+                        <Label className="text-xs text-muted-foreground">最小</Label>
                         <Input
                           type="number"
                           min={1}
@@ -948,7 +964,7 @@ export default function ColumnsPage() {
                         />
                       </div>
                       <div>
-                        <Label className="text-xs text-gray-500">最大</Label>
+                        <Label className="text-xs text-muted-foreground">最大</Label>
                         <Input
                           type="number"
                           min={1}
@@ -966,7 +982,7 @@ export default function ColumnsPage() {
                     <Label className="text-sm font-medium">长休眠间隔 (秒)</Label>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <Label className="text-xs text-gray-500">最小</Label>
+                        <Label className="text-xs text-muted-foreground">最小</Label>
                         <Input
                           type="number"
                           min={10}
@@ -977,7 +993,7 @@ export default function ColumnsPage() {
                         />
                       </div>
                       <div>
-                        <Label className="text-xs text-gray-500">最大</Label>
+                        <Label className="text-xs text-muted-foreground">最大</Label>
                         <Input
                           type="number"
                           min={10}
@@ -1000,7 +1016,7 @@ export default function ColumnsPage() {
                       value={itemsPerBatch}
                       onChange={(e) => setItemsPerBatch(parseInt(e.target.value) || 10)}
                     />
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-muted-foreground">
                       每完成指定数量的请求后，会进入长休眠
                     </p>
                   </div>
@@ -1008,13 +1024,13 @@ export default function ColumnsPage() {
                   {/* 文件和图片选项 */}
                   <div className="space-y-3">
                     <Label className="text-sm font-medium">附件选项</Label>
-                    <div className="flex items-center gap-6">
+                    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={downloadFiles}
                           onChange={(e) => setDownloadFiles(e.target.checked)}
-                          className="w-4 h-4 rounded border-gray-300"
+                          className="w-4 h-4 rounded border-input accent-primary"
                         />
                         <span className="text-sm">下载文件</span>
                       </label>
@@ -1023,17 +1039,17 @@ export default function ColumnsPage() {
                           type="checkbox"
                           checked={downloadVideos}
                           onChange={(e) => setDownloadVideos(e.target.checked)}
-                          className="w-4 h-4 rounded border-gray-300"
+                          className="w-4 h-4 rounded border-input accent-primary"
                         />
                         <span className="text-sm">下载视频</span>
-                        <span className="text-xs text-gray-400">(需ffmpeg)</span>
+                        <span className="text-xs text-muted-foreground">(需ffmpeg)</span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={cacheImages}
                           onChange={(e) => setCacheImages(e.target.checked)}
-                          className="w-4 h-4 rounded border-gray-300"
+                          className="w-4 h-4 rounded border-input accent-primary"
                         />
                         <span className="text-sm">缓存图片</span>
                       </label>
@@ -1041,18 +1057,18 @@ export default function ColumnsPage() {
                   </div>
                 </div>
                 
-                {/* 增量模式 */}
-                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                  <label className="flex items-center gap-3 cursor-pointer">
+                {/* 增量模式（Claude 暖橙色调） */}
+                <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
+                  <label className="flex items-start gap-3 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={incrementalMode}
                       onChange={(e) => setIncrementalMode(e.target.checked)}
-                      className="w-5 h-5 rounded border-gray-300"
+                      className="w-5 h-5 rounded border-input accent-primary mt-0.5"
                     />
                     <div>
-                      <span className="text-sm font-medium text-blue-800">增量采集模式</span>
-                      <p className="text-xs text-blue-600 mt-0.5">
+                      <span className="text-sm font-medium text-foreground">增量采集模式</span>
+                      <p className="text-xs text-muted-foreground mt-0.5">
                         开启后将跳过已采集的文章，只获取新内容（推荐）
                       </p>
                     </div>
@@ -1175,4 +1191,3 @@ export default function ColumnsPage() {
     </div>
   );
 }
-

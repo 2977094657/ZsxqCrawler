@@ -95,7 +95,6 @@ export default function Home() {
         <div className="mb-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold mb-1">🌟 知识星球数据采集器</h1>
               <p className="text-sm text-muted-foreground">
                 知识星球内容爬取与文件下载工具，支持话题采集、评论获取、文件批量下载等功能
               </p>
@@ -120,7 +119,7 @@ export default function Home() {
                     <img
                       src={selectedGroup.background_url}
                       alt={selectedGroup.name}
-                      className="w-12 h-12 rounded-lg object-cover"
+                      className="w-12 h-12 rounded-lg object-cover border border-border"
                     />
                   )}
                   <div className="flex-1">

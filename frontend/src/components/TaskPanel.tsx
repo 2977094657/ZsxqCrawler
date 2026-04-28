@@ -42,7 +42,7 @@ export default function TaskPanel() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'pending':
-        return <Badge className="bg-gray-100 text-gray-800">⏳ 等待中</Badge>;
+        return <Badge variant="secondary">⏳ 等待中</Badge>;
       case 'running':
         return <Badge className="bg-blue-100 text-blue-800">🔄 运行中</Badge>;
       case 'completed':
@@ -101,7 +101,7 @@ export default function TaskPanel() {
     <div className="space-y-4">
       {/* 任务统计概览 */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="border border-gray-200 shadow-none">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">总任务数</CardTitle>
             <Badge variant="secondary">📊</Badge>
@@ -112,7 +112,7 @@ export default function TaskPanel() {
           </CardContent>
         </Card>
 
-        <Card className="border border-gray-200 shadow-none">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">运行中</CardTitle>
             <Badge variant="secondary" className="bg-blue-100 text-blue-800">🔄</Badge>
@@ -123,7 +123,7 @@ export default function TaskPanel() {
           </CardContent>
         </Card>
 
-        <Card className="border border-gray-200 shadow-none">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">已完成</CardTitle>
             <Badge variant="secondary" className="bg-green-100 text-green-800">✅</Badge>
@@ -134,7 +134,7 @@ export default function TaskPanel() {
           </CardContent>
         </Card>
 
-        <Card className="border border-gray-200 shadow-none">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">失败</CardTitle>
             <Badge variant="secondary" className="bg-red-100 text-red-800">❌</Badge>
@@ -147,7 +147,7 @@ export default function TaskPanel() {
       </div>
 
       {/* 任务列表 */}
-      <Card className="border border-gray-200 shadow-none">
+      <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
@@ -238,7 +238,7 @@ export default function TaskPanel() {
 
       {/* 运行中任务的进度显示 */}
       {getRunningTasks().length > 0 && (
-        <Card className="border border-gray-200 shadow-none">
+        <Card>
           <CardHeader>
             <CardTitle>运行中的任务</CardTitle>
             <CardDescription>正在执行的任务详情</CardDescription>

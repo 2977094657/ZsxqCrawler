@@ -98,7 +98,7 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
       {/* 文件统计概览 */}
       {fileStats && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <Card className="border border-gray-200 shadow-none">
+          <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">文件总数</CardTitle>
               <Badge variant="secondary">📁</Badge>
@@ -109,7 +109,7 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
             </CardContent>
           </Card>
 
-          <Card className="border border-gray-200 shadow-none">
+          <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">已下载</CardTitle>
               <Badge variant="secondary" className="bg-green-100 text-green-800">✅</Badge>
@@ -120,7 +120,7 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
             </CardContent>
           </Card>
 
-          <Card className="border border-gray-200 shadow-none">
+          <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">待下载</CardTitle>
               <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">⏳</Badge>
@@ -131,7 +131,7 @@ export default function FilePanel({ onStatsUpdate, selectedGroup }: FilePanelPro
             </CardContent>
           </Card>
 
-          <Card className="border border-gray-200 shadow-none">
+          <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">下载失败</CardTitle>
               <Badge variant="secondary" className="bg-red-100 text-red-800">❌</Badge>

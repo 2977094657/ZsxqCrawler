@@ -211,7 +211,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {/* 获取最新话题 */}
-      <Card className="border border-gray-200 shadow-none">
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Badge variant="secondary">🆕</Badge>
@@ -236,7 +236,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
         </CardContent>
       </Card>
       {/* 增量爬取历史 */}
-      <Card className="border border-gray-200 shadow-none">
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Badge variant="secondary">📚</Badge>
@@ -286,7 +286,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
       </Card>
 
       {/* 获取所有历史数据 */}
-      <Card className="border border-gray-200 shadow-none">
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Badge variant="secondary">🔄</Badge>
@@ -333,7 +333,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
       </Card>
 
       {/* 清除话题数据库 */}
-      <Card className="border border-gray-200 shadow-none">
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Badge variant="destructive">🗑️</Badge>

@@ -44,7 +44,6 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
     <div className="min-h-screen bg-background">
       <div className="container mx-auto p-4">
         <div className="mb-4">
-          <h1 className="text-2xl font-bold mb-1">🌟 知识星球数据采集器</h1>
           <p className="text-sm text-muted-foreground">
             请配置您的知识星球认证信息以开始使用
           </p>
@@ -134,14 +133,14 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
                 <h3 className="text-lg font-semibold">1. 获取Cookie</h3>
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
                   <ol className="list-decimal list-inside space-y-2 text-sm">
-                    <li>使用Chrome或Edge浏览器访问 <code className="bg-gray-100 px-1 rounded">https://wx.zsxq.com/</code></li>
+                    <li>使用Chrome或Edge浏览器访问 <code className="bg-muted px-1 rounded">https://wx.zsxq.com/</code></li>
                     <li>登录您的知识星球账号</li>
-                    <li>按 <kbd className="bg-gray-200 px-2 py-1 rounded">F12</kbd> 打开开发者工具</li>
+                    <li>按 <kbd className="bg-muted border border-border px-2 py-1 rounded">F12</kbd> 打开开发者工具</li>
                     <li>切换到 <strong>Network</strong> (网络) 标签</li>
                     <li>刷新页面或点击任意链接</li>
                     <li>在网络请求列表中找到任意一个请求（通常是API请求）</li>
                     <li>点击该请求，在右侧面板中找到 <strong>Request Headers</strong></li>
-                    <li>找到 <code className="bg-gray-100 px-1 rounded">Cookie:</code> 行，复制完整的值</li>
+                    <li>找到 <code className="bg-muted px-1 rounded">Cookie:</code> 行，复制完整的值</li>
                   </ol>
                 </div>
               </div>

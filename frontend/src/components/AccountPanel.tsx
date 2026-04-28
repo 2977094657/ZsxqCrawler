@@ -149,7 +149,7 @@ export default function AccountPanel() {
                       <TableCell className="font-medium">{acc.name || acc.id}</TableCell>
                       <TableCell>
                         {acc.loadingSelf ? (
-                          <span className="text-xs text-gray-400">加载中...</span>
+                          <span className="text-xs text-muted-foreground/70">加载中...</span>
                         ) : acc.selfInfo ? (
                           <div className="flex items-center gap-2">
                             {acc.selfInfo.avatar_url && (
@@ -163,24 +163,24 @@ export default function AccountPanel() {
                             <div className="text-sm">
                               <div className="font-medium">{acc.selfInfo.name || '未命名'}</div>
                               {acc.selfInfo.grade && (
-                                <div className="text-xs text-gray-500">{acc.selfInfo.grade}</div>
+                                <div className="text-xs text-muted-foreground">{acc.selfInfo.grade}</div>
                               )}
                             </div>
                           </div>
                         ) : (
-                          <span className="text-xs text-gray-400">无信息</span>
+                          <span className="text-xs text-muted-foreground/70">无信息</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-sm text-gray-600">
+                      <TableCell className="text-sm text-foreground/80">
                         {acc.selfInfo?.uid || '-'}
                       </TableCell>
-                      <TableCell className="text-sm text-gray-600">
+                      <TableCell className="text-sm text-foreground/80">
                         {acc.selfInfo?.location || '-'}
                       </TableCell>
-                      <TableCell className="max-w-[200px] truncate text-xs text-gray-500">
+                      <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">
                         {acc.cookie || '***'}
                       </TableCell>
-                      <TableCell className="text-sm text-gray-600">{acc.created_at || '-'}</TableCell>
+                      <TableCell className="text-sm text-foreground/80">{acc.created_at || '-'}</TableCell>
                       <TableCell className="text-right space-x-2">
                         <Button
                           size="sm"

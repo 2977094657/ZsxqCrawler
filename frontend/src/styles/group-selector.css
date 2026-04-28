@@ -8,14 +8,9 @@
   overflow: hidden;
 }
 
-/* 群组卡片悬停效果 */
+/* 群组卡片悬停效果（扁平风格：不使用阴影或位移） */
 .group-card {
-  transition: all 0.2s ease-in-out;
-}
-
-.group-card:hover {
-  transform: translateY(-2px);
-  border-color: #e5e7eb;
+  transition: border-color 0.15s ease-in-out, background-color 0.15s ease-in-out;
 }
 
 /* 状态徽章样式 */

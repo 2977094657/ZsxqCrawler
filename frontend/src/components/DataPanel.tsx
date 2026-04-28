@@ -124,7 +124,7 @@ export default function DataPanel({ selectedGroup }: DataPanelProps) {
       </TabsList>
 
       <TabsContent value="topics">
-        <Card className="border border-gray-200 shadow-none">
+        <Card>
           <CardHeader>
             <CardTitle>
               {selectedGroup ? `${selectedGroup.name} - 话题列表` : '话题列表'}
@@ -211,7 +211,7 @@ export default function DataPanel({ selectedGroup }: DataPanelProps) {
       </TabsContent>
 
       <TabsContent value="files">
-        <Card className="border border-gray-200 shadow-none">
+        <Card>
           <CardHeader>
             <CardTitle>文件列表</CardTitle>
             <CardDescription>查看已收集的文件信息</CardDescription>
