@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, X, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw, BookOpen } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, X, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw, BookOpen, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { apiClient, Group, GroupStats, Topic, FileStatus, Account, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
@@ -77,6 +77,9 @@ export default function GroupDetailPage() {
   // 专栏相关
   const [hasColumns, setHasColumns] = useState<boolean>(false);
   const [columnsTitle, setColumnsTitle] = useState<string | null>(null);
+  // 跳转到专栏页时的过渡状态：用于在点击瞬间显示全屏加载遮罩，
+  // 避免 Next.js 路由 chunk 加载或专栏页接口请求期间出现"点击无反应"。
+  const [navigatingToColumns, setNavigatingToColumns] = useState<boolean>(false);
 
 
 
@@ -864,6 +867,37 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     }
   };
 
+  // 一旦确认有专栏，立即预取专栏页路由 chunk，缩短点击后的"白屏"时间。
+  useEffect(() => {
+    if (!hasColumns) return;
+    try {
+      router.prefetch(`/groups/${groupId}/columns`);
+    } catch {
+      // prefetch 失败不影响功能
+    }
+  }, [hasColumns, groupId, router]);
+
+  // 用户从专栏页通过浏览器后退/BFCache 返回时，清理"正在跳转专栏"遮罩状态，避免残留。
+  useEffect(() => {
+    const handlePageShow = () => setNavigatingToColumns(false);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') setNavigatingToColumns(false);
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  // 点击"专栏"按钮：立即开启遮罩并跳转
+  const handleOpenColumns = () => {
+    if (navigatingToColumns) return;
+    setNavigatingToColumns(true);
+    router.push(`/groups/${groupId}/columns`);
+  };
+
   // 清空图片缓存（使用自定义弹窗，不再重复浏览器确认）
   const clearImageCache = async () => {
     setClearingCache(true);
@@ -1232,7 +1266,16 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                     {refreshingTopics.has(topic.topic_id) ? '获取中' : '远程刷新'}
                   </button>
 
-                  {/* 删除按钮（自定义弹窗确认） */}
+                  {/* 导出 ZIP（含 README.md 与 assets/，离线可看） */}
+                  <a
+                    href={apiClient.getTopicMarkdownExportUrl(topic.topic_id, groupId)}
+                    className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 transition-colors ml-2"
+                    title="导出为 ZIP 包（含 Markdown + 图片）"
+                  >
+                    <Download className="w-3 h-3" />
+                    ZIP
+                  </a>
+
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
                       <button
@@ -1761,17 +1804,14 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
 
   if (loading || isRetrying) {
     return (
-      <div className="min-h-screen bg-gray-50 p-4">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center py-8">
-            <p className="text-muted-foreground">
-              {isRetrying ? `正在重试获取群组信息... (第${retryCount}次)` : '加载中...'}
-            </p>
-            {isRetrying && (
-              <p className="text-xs text-gray-400 mt-2">
-                检测到API防护机制，正在自动重试获取数据
-              </p>
-            )}
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3 px-6 py-5 rounded-xl border border-border bg-card shadow-sm">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <div className="text-sm font-medium text-foreground">
+            {isRetrying ? `正在重试获取群组信息（第 ${retryCount} 次）` : '正在加载社群数据'}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {isRetrying ? '检测到 API 防护机制，正在自动重试' : '首次进入需向后端请求群组信息，请稍候…'}
           </div>
         </div>
       </div>
@@ -1797,7 +1837,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
             <CardContent className="pt-6">
               <div className="text-center">
                 <p className="text-red-600 mb-4">{error}</p>
-                <Button onClick={loadGroupDetail}>重试</Button>
+                <Button onClick={() => loadGroupDetail()}>重试</Button>
               </div>
             </CardContent>
           </Card>
@@ -1853,9 +1893,14 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                 variant="outline"
                 size="sm"
                 className="flex items-center gap-2 whitespace-nowrap bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200 hover:border-amber-300 hover:from-amber-100 hover:to-orange-100 text-amber-700"
-                onClick={() => router.push(`/groups/${groupId}/columns`)}
+                onClick={handleOpenColumns}
+                disabled={navigatingToColumns}
               >
-                <BookOpen className="h-4 w-4" />
+                {navigatingToColumns ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <BookOpen className="h-4 w-4" />
+                )}
                 {columnsTitle || '专栏'}
               </Button>
             )}
@@ -2825,6 +2870,23 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
         pagesPerBatch={crawlPagesPerBatch}
         onSettingsChange={handleCrawlSettingsChange}
       />
+
+      {/* 跳转到专栏页时的全屏加载遮罩，立即给用户反馈，避免"点击无反应"的错觉 */}
+      {navigatingToColumns && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm"
+        >
+          <div className="flex flex-col items-center gap-3 px-6 py-5 rounded-xl border border-border bg-card shadow-lg">
+            <Loader2 className="h-8 w-8 animate-spin text-amber-600" />
+            <div className="text-sm font-medium text-foreground">
+              正在打开「{columnsTitle || '专栏'}」
+            </div>
+            <div className="text-xs text-muted-foreground">加载专栏数据中…</div>
+          </div>
+        </div>
+      )}
 
       </div>
   );

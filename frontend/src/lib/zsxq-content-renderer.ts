@@ -122,11 +122,34 @@ export function renderZsxqContent(content: string): string {
 }
 
 /**
+ * 把 HTML 中残留的 `\n` 显式替换为 `<br/>`，并归一连续多余的 `<br/>`。
+ *
+ * 背景：知识星球 API 返回的 `talk.text / question.text / answer.text / comment.text`
+ * 用 `\n` 表示换行；之前依赖父元素 `whitespace-pre-wrap` 让 `\n` 渲染为换行，
+ * 但许多评论/专栏渲染点没有这个 class，导致换行被默认 `white-space: normal`
+ * 折叠成空格、内容"全挤在一起"。在 HTML 出口直接把 `\n` 转 `<br/>` 可以
+ * 在结构层面保证换行，与是否设置 `whitespace-pre-wrap` 解耦。
+ *
+ * 同时把 hashtag / mention 标签替换时人为插入的前导 `<br>` 与原文 `\n` 合并造成的
+ * 连续多个 `<br>` 折叠为最多两个（即最多保留一个空行），避免视觉上过度堆叠。
+ */
+function normalizeLineBreaks(html: string): string {
+  if (!html) return html;
+  // 1) 统一换行符
+  let out = html.replace(/\r\n?/g, '\n');
+  // 2) `\n` -> `<br/>`
+  out = out.replace(/\n/g, '<br/>');
+  // 3) 折叠连续的 <br> 序列：3 个及以上压缩为 2 个（保留一个空行）
+  out = out.replace(/(?:<br\s*\/?\s*>\s*){3,}/gi, '<br/><br/>');
+  return out;
+}
+
+/**
  * 为React组件提供的安全HTML渲染
  */
 export function createSafeHtml(content: string) {
   const renderedContent = renderZsxqContent(content);
-  return { __html: renderedContent };
+  return { __html: normalizeLineBreaks(renderedContent) };
 }
 
 /**
@@ -138,8 +161,12 @@ export function extractPlainText(content: string): string {
   // 先渲染特殊标签
   const renderedContent = renderZsxqContent(content);
 
-  // 移除所有HTML标签
-  return renderedContent.replace(/<[^>]*>/g, '').trim();
+  // 把 <br>、</p> 还原为 \n，再剥离其他 HTML 标签——保留行数信息，
+  // 让上层的 split('\n').length 行数检测继续工作。
+  const withNewlines = renderedContent
+    .replace(/<br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/p\s*>/gi, '\n');
+  return withNewlines.replace(/<[^>]*>/g, '').trim();
 }
 
 /**
@@ -169,7 +196,7 @@ export function createSafeHtmlWithHighlight(content: string, searchTerm?: string
     renderedContent = highlightSearchTerm(renderedContent, searchTerm);
   }
 
-  return { __html: renderedContent };
+  return { __html: normalizeLineBreaks(renderedContent) };
 }
 
 
