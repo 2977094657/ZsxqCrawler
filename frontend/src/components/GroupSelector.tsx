@@ -20,6 +20,10 @@ interface GroupSelectorProps {
 }
 
 type SourceFilter = 'all' | 'account' | 'local';
+type ResetAllResponse = {
+  success?: boolean;
+  message?: string;
+};
 
 export default function GroupSelector(_props: GroupSelectorProps) {
   const router = useRouter();
@@ -30,6 +34,7 @@ export default function GroupSelector(_props: GroupSelectorProps) {
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const [deletingGroups, setDeletingGroups] = useState<Set<number>>(new Set());
+  const [resettingAll, setResettingAll] = useState(false);
   // 当前激活的来源筛选标签
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   // 用户点击某个群组卡片后正在跳转到详情页的群组 id；用于立即显示全屏加载遮罩
@@ -235,6 +240,30 @@ export default function GroupSelector(_props: GroupSelectorProps) {
         s.delete(groupId);
         return s;
       });
+    }
+  };
+
+  const handleDeleteAllLocalData = async () => {
+    if (resettingAll) return;
+    setResettingAll(true);
+    try {
+      const res = await apiClient.deleteAllLocalData() as ResetAllResponse;
+      const success = res.success !== false;
+      const msg = res.message || '已重置为初始状态';
+      if (!success) {
+        throw new Error(msg);
+      }
+      toast.success(msg);
+      setGroups([]);
+      setGroupStats({});
+      window.setTimeout(() => {
+        window.location.href = '/';
+      }, 800);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`删除全部失败: ${msg}`);
+    } finally {
+      setResettingAll(false);
     }
   };
 
@@ -485,6 +514,39 @@ export default function GroupSelector(_props: GroupSelectorProps) {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    disabled={resettingAll}
+                    className="flex items-center gap-2"
+                  >
+                    {resettingAll ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                    删除全部
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="text-destructive">确认删除全部数据并重置应用</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      此操作将删除所有账号、Cookie、配置、社群本地数据库、下载文件与缓存，并删除 config.toml。应用会恢复到接近刚拉取代码的初始状态，操作不可恢复。
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>取消</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/30"
+                      onClick={handleDeleteAllLocalData}
+                    >
+                      确认删除全部
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
               <Button
                 variant="outline"
                 onClick={handleRefresh}

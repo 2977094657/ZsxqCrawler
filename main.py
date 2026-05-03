@@ -6,6 +6,8 @@
 import os
 import sys
 import asyncio
+import gc
+import shutil
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -32,6 +34,9 @@ from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config
 from zsxq_database import ZSXQDatabase
 from zsxq_file_database import ZSXQFileDatabase
 from db_path_manager import get_db_path_manager
+import accounts_sql_manager as accounts_sql_module
+import account_info_db as account_info_module
+import image_cache_manager as image_cache_module
 from image_cache_manager import get_image_cache_manager
 # 使用SQL账号管理器
 from accounts_sql_manager import get_accounts_sql_manager
@@ -470,6 +475,67 @@ def is_task_stopped(task_id: str) -> bool:
     stopped = task_stop_flags.get(task_id, False)
     return stopped
 
+def get_active_task_ids() -> List[str]:
+    return [
+        task_id
+        for task_id, task in current_tasks.items()
+        if task.get("status") in {"pending", "running"}
+    ]
+
+def remove_sqlite_file(db_path: str) -> bool:
+    removed = False
+    for path in (db_path, f"{db_path}-wal", f"{db_path}-shm"):
+        if os.path.exists(path):
+            os.remove(path)
+            removed = True
+    return removed
+
+def close_runtime_handles() -> None:
+    global crawler_instance
+
+    if crawler_instance:
+        try:
+            if hasattr(crawler_instance, "file_downloader") and crawler_instance.file_downloader:
+                if hasattr(crawler_instance.file_downloader, "file_db") and crawler_instance.file_downloader.file_db:
+                    crawler_instance.file_downloader.file_db.close()
+        except Exception as e:
+            print(f"⚠️ 关闭全局文件数据库连接失败: {e}")
+        try:
+            if hasattr(crawler_instance, "db") and crawler_instance.db:
+                crawler_instance.db.close()
+        except Exception as e:
+            print(f"⚠️ 关闭全局话题数据库连接失败: {e}")
+        crawler_instance = None
+
+    for task_id, downloader in list(file_downloader_instances.items()):
+        try:
+            if hasattr(downloader, "file_db") and downloader.file_db:
+                downloader.file_db.close()
+        except Exception as e:
+            print(f"⚠️ 关闭任务 {task_id} 文件数据库连接失败: {e}")
+    file_downloader_instances.clear()
+
+    try:
+        sql_singleton = getattr(accounts_sql_module, "_sql_manager_singleton", None)
+        if sql_singleton:
+            sql_singleton.close()
+        accounts_sql_module._sql_manager_singleton = None
+    except Exception as e:
+        print(f"⚠️ 关闭账号数据库连接失败: {e}")
+
+    try:
+        info_singleton = getattr(account_info_module, "_db_singleton", None)
+        if info_singleton:
+            info_singleton.close()
+        account_info_module._db_singleton = None
+    except Exception as e:
+        print(f"⚠️ 关闭账号信息数据库连接失败: {e}")
+
+    try:
+        image_cache_module._cache_managers.clear()
+    except Exception as e:
+        print(f"⚠️ 清理图片缓存管理器失败: {e}")
+
 # API路由定义
 @app.get("/")
 async def root():
@@ -532,6 +598,119 @@ dir = "downloads"
         return {"message": "配置更新成功", "success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+@app.delete("/api/local-data/reset")
+async def reset_all_local_data():
+    try:
+        active_task_ids = get_active_task_ids()
+        if active_task_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=f"存在正在运行的任务，请先停止后再重置: {', '.join(active_task_ids)}"
+            )
+
+        details = {
+            "output_dir_removed": False,
+            "database_dir_removed": False,
+            "cache_dir_removed": False,
+            "downloads_dir_removed": False,
+            "config_removed": False,
+            "env_files_removed": [],
+            "accounts_json_reset": False,
+            "accounts_json_backup_removed": False,
+            "task_state_cleared": False,
+        }
+        errors = []
+
+        close_runtime_handles()
+        gc.collect()
+        time.sleep(0.3)
+
+        def remove_dir(key: str, path: str) -> None:
+            if not os.path.exists(path):
+                return
+            try:
+                shutil.rmtree(path, ignore_errors=False)
+                details[key] = True
+            except Exception as exc:
+                errors.append({"path": path, "error": str(exc)})
+
+        def remove_file(key: str, path: str) -> None:
+            if not os.path.exists(path):
+                return
+            try:
+                os.remove(path)
+                details[key] = True
+            except Exception as exc:
+                errors.append({"path": path, "error": str(exc)})
+
+        path_manager = get_db_path_manager()
+        output_dir = LOCAL_OUTPUT_DIR if os.path.isabs(LOCAL_OUTPUT_DIR) else os.path.join(project_root, LOCAL_OUTPUT_DIR)
+        database_root = (
+            os.path.dirname(path_manager.base_dir)
+            if os.path.basename(path_manager.base_dir) == "databases"
+            else path_manager.base_dir
+        )
+
+        remove_dir("output_dir_removed", output_dir)
+        if os.path.abspath(database_root) != os.path.abspath(output_dir):
+            remove_dir("database_dir_removed", database_root)
+
+        remove_dir("cache_dir_removed", os.path.join(project_root, "cache"))
+        remove_dir("downloads_dir_removed", os.path.join(project_root, "downloads"))
+        remove_file("config_removed", os.path.join(project_root, "config.toml"))
+
+        for env_path in (
+            os.path.join(project_root, ".env"),
+            os.path.join(project_root, ".env.local"),
+            os.path.join(project_root, "frontend", ".env"),
+            os.path.join(project_root, "frontend", ".env.local"),
+            os.path.join(project_root, "frontend", ".env.development.local"),
+            os.path.join(project_root, "frontend", ".env.production.local"),
+        ):
+            if not os.path.exists(env_path):
+                continue
+            try:
+                os.remove(env_path)
+                details["env_files_removed"].append(env_path)
+            except Exception as exc:
+                errors.append({"path": env_path, "error": str(exc)})
+
+        accounts_path = os.path.join(project_root, "accounts.json")
+        try:
+            with open(accounts_path, "w", encoding="utf-8") as f:
+                json.dump({"accounts": [], "group_account_map": {}}, f, ensure_ascii=False, indent=2)
+            details["accounts_json_reset"] = True
+        except Exception as exc:
+            errors.append({"path": accounts_path, "error": str(exc)})
+
+        remove_file("accounts_json_backup_removed", accounts_path + ".backup")
+
+        _local_groups_cache["ids"] = set()
+        _local_groups_cache["scanned_at"] = time.time()
+        _account_detect_cache["built_at"] = 0
+        _account_detect_cache["group_to_account"] = {}
+        _account_detect_cache["cookie_by_account"] = {}
+
+        global task_counter
+        current_tasks.clear()
+        task_logs.clear()
+        task_stop_flags.clear()
+        sse_connections.clear()
+        task_counter = 0
+        details["task_state_cleared"] = True
+
+        success = len(errors) == 0
+        return {
+            "success": success,
+            "message": "已重置为初始状态" if success else "重置部分完成，部分文件删除失败",
+            "details": details,
+            "errors": errors,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重置全部本地数据失败: {str(e)}")
 
 # 账号管理 API
 @app.get("/api/accounts")
@@ -3947,6 +4126,7 @@ async def delete_group_local(group_id: str):
         details = {
             "topics_db_removed": False,
             "files_db_removed": False,
+            "columns_db_removed": False,
             "downloads_dir_removed": False,
             "images_cache_removed": False,
             "group_dir_removed": False,
@@ -3972,7 +4152,6 @@ async def delete_group_local(group_id: str):
             print(f"⚠️ 获取爬虫实例以关闭连接失败: {e}")
 
         # 垃圾回收 + 等待片刻，确保句柄释放
-        import gc, time, shutil
         gc.collect()
         time.sleep(0.3)
 
@@ -3980,11 +4159,11 @@ async def delete_group_local(group_id: str):
         group_dir = path_manager.get_group_dir(group_id)
         topics_db = path_manager.get_topics_db_path(group_id)
         files_db = path_manager.get_files_db_path(group_id)
+        columns_db = path_manager.get_columns_db_path(group_id)
 
         # 删除话题数据库
         try:
-            if os.path.exists(topics_db):
-                os.remove(topics_db)
+            if remove_sqlite_file(topics_db):
                 details["topics_db_removed"] = True
                 print(f"🗑️ 已删除话题数据库: {topics_db}")
         except PermissionError as pe:
@@ -3994,14 +4173,22 @@ async def delete_group_local(group_id: str):
 
         # 删除文件数据库
         try:
-            if os.path.exists(files_db):
-                os.remove(files_db)
+            if remove_sqlite_file(files_db):
                 details["files_db_removed"] = True
                 print(f"🗑️ 已删除文件数据库: {files_db}")
         except PermissionError as pe:
             raise HTTPException(status_code=500, detail=f"文件数据库被占用，无法删除: {pe}")
         except Exception as e:
             print(f"⚠️ 删除文件数据库失败: {e}")
+
+        try:
+            if remove_sqlite_file(columns_db):
+                details["columns_db_removed"] = True
+                print(f"🗑️ 已删除专栏数据库: {columns_db}")
+        except PermissionError as pe:
+            raise HTTPException(status_code=500, detail=f"专栏数据库被占用，无法删除: {pe}")
+        except Exception as e:
+            print(f"⚠️ 删除专栏数据库失败: {e}")
 
         # 删除下载目录
         downloads_dir = os.path.join(group_dir, "downloads")

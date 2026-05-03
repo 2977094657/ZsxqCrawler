@@ -681,6 +681,12 @@ class ApiClient {
     });
   }
 
+  async deleteAllLocalData() {
+    return this.request('/api/local-data/reset', {
+      method: 'DELETE',
+    });
+  }
+
   // =========================
   // 专栏相关 API
   // =========================
