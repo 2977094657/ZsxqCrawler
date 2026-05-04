@@ -16,7 +16,7 @@ from typing import Dict, Optional, Any
 
 import requests
 
-from zsxq_file_database import ZSXQFileDatabase
+from .zsxq_file_database import ZSXQFileDatabase
 
 
 class ZSXQFileDownloader:
@@ -68,7 +68,7 @@ class ZSXQFileDownloader:
 
         # 如果没有指定数据库路径，使用默认路径
         if db_path is None:
-            from db_path_manager import get_db_path_manager
+            from .db_path_manager import get_db_path_manager
             path_manager = get_db_path_manager()
             self.db_path = path_manager.get_files_db_path(group_id)
         else:
@@ -76,7 +76,7 @@ class ZSXQFileDownloader:
 
         # 为每个群组创建专属的下载目录
         if download_dir == "downloads":  # 默认目录
-            from db_path_manager import get_db_path_manager
+            from .db_path_manager import get_db_path_manager
             path_manager = get_db_path_manager()
             group_dir = path_manager.get_group_dir(group_id)
             self.download_dir = os.path.join(group_dir, "downloads")

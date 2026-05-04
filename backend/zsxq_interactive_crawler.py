@@ -9,9 +9,9 @@ import time
 import random
 import json
 from typing import Dict, Any, Optional, List
-from zsxq_database import ZSXQDatabase
-from zsxq_file_downloader import ZSXQFileDownloader
-from db_path_manager import get_db_path_manager
+from .zsxq_database import ZSXQDatabase
+from .zsxq_file_downloader import ZSXQFileDownloader
+from .db_path_manager import get_db_path_manager
 import os
 import argparse
 try:

@@ -27,8 +27,8 @@ class DatabasePathManager:
     """数据库路径管理器 - 统一管理所有数据库文件的存储位置"""
     
     def __init__(self, base_dir: str = "output/databases"):
-        # 以代码所在目录作为项目根目录（避免因缺少 config.toml 而一路向上走到文件系统根目录）
-        self.project_root = os.path.abspath(os.path.dirname(__file__))
+        # backend 包位于项目根目录下，统一把上一级目录作为项目根目录。
+        self.project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         self._ensure_config_toml()
 
         # 确保使用项目根目录的绝对路径

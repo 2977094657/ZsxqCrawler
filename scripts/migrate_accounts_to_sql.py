@@ -7,9 +7,15 @@
 """
 
 import os
+import sys
 import json
-from accounts_manager import get_accounts, get_group_account_mapping
-from accounts_sql_manager import get_accounts_sql_manager
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from backend.accounts_manager import get_accounts, get_group_account_mapping
+from backend.accounts_sql_manager import get_accounts_sql_manager
 from loguru import logger
 
 
@@ -85,7 +91,7 @@ def migrate_accounts():
         logger.info(f"成功迁移 {mapped_count}/{len(group_mapping)} 个群组映射")
 
         # 备份JSON文件
-        json_file = os.path.join(os.path.dirname(__file__), "accounts.json")
+        json_file = os.path.join(PROJECT_ROOT, "accounts.json")
         if os.path.exists(json_file):
             backup_file = json_file + ".backup"
             logger.info(f"备份 JSON 文件到 {backup_file}")

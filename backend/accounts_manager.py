@@ -12,12 +12,15 @@ _lock = threading.Lock()
 
 def _get_project_root() -> str:
     """
-    在当前文件夹向上查找包含 config.toml 的目录，作为项目根目录。
+    在当前文件夹向上查找项目标记文件，作为项目根目录。
     找不到则返回当前文件所在目录。
     """
     cur = os.path.abspath(os.path.dirname(__file__))
     while True:
-        if os.path.exists(os.path.join(cur, "config.toml")):
+        if any(
+            os.path.exists(os.path.join(cur, marker))
+            for marker in ("config.toml", "pyproject.toml", "README.md", ".git")
+        ):
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:

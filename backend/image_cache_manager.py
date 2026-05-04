@@ -268,7 +268,7 @@ def get_image_cache_manager(group_id: str = None) -> ImageCacheManager:
     if group_id:
         # 使用群组专用缓存目录
         if group_id not in _cache_managers:
-            from db_path_manager import get_db_path_manager
+            from .db_path_manager import get_db_path_manager
             path_manager = get_db_path_manager()
             # 在群组数据库目录下创建images子目录
             db_dir = path_manager.get_group_data_dir(group_id)
