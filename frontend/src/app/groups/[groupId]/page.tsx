@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect, useRef, memo, useCallback } from 'react';
+import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +24,180 @@ import ImageGallery from '@/components/ImageGallery';
 
 // 话题详情缓存，避免重复请求
 const topicDetailCache: Map<string, any> = new Map();
+
+interface TopicTag {
+  tag_id: number;
+  tag_name: string;
+  topic_count: number;
+}
+
+const TAG_ROW_HEIGHT = 28;
+const TAG_ROW_OVERSCAN = 5;
+const TAG_ROW_GAP = 6;
+const DEFAULT_TAG_LIST_WIDTH = 288;
+
+// 标签是可换行 chip，按估算宽度预先分行，再只渲染可视行，避免大量标签撑高左侧卡片。
+const estimateTagChipWidth = (tag: TopicTag): number => {
+  const text = `${tag.tag_name} (${tag.topic_count})`;
+  let textWidth = 0;
+
+  for (const char of Array.from(text)) {
+    if (/[\u4e00-\u9fff]/.test(char)) {
+      textWidth += 12;
+    } else if (/[A-Z]/.test(char)) {
+      textWidth += 8;
+    } else {
+      textWidth += 7;
+    }
+  }
+
+  // 额外空间包含左右 padding、边框和计数前的间距。
+  return Math.ceil(textWidth + 24);
+};
+
+const buildVirtualTagRows = (tags: TopicTag[], containerWidth: number): TopicTag[][] => {
+  const safeWidth = Math.max(120, containerWidth || DEFAULT_TAG_LIST_WIDTH);
+  const rows: TopicTag[][] = [];
+  let currentRow: TopicTag[] = [];
+  let currentWidth = 0;
+
+  tags.forEach((tag) => {
+    const chipWidth = Math.min(estimateTagChipWidth(tag), safeWidth);
+    const nextWidth = currentRow.length === 0
+      ? chipWidth
+      : currentWidth + TAG_ROW_GAP + chipWidth;
+
+    if (currentRow.length > 0 && nextWidth > safeWidth) {
+      rows.push(currentRow);
+      currentRow = [tag];
+      currentWidth = chipWidth;
+      return;
+    }
+
+    currentRow.push(tag);
+    currentWidth = nextWidth;
+  });
+
+  if (currentRow.length > 0) {
+    rows.push(currentRow);
+  }
+
+  return rows;
+};
+
+const VirtualizedTagList = memo(function VirtualizedTagList({
+  tags,
+  selectedTag,
+  onSelectTag,
+}: {
+  tags: TopicTag[];
+  selectedTag: number | null;
+  onSelectTag: (tagId: number) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportSize, setViewportSize] = useState({
+    height: 0,
+    width: DEFAULT_TAG_LIST_WIDTH,
+  });
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) {
+      return;
+    }
+
+    const updateSize = () => {
+      setViewportSize({
+        height: node.clientHeight,
+        width: node.clientWidth || DEFAULT_TAG_LIST_WIDTH,
+      });
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateSize);
+      return () => window.removeEventListener('resize', updateSize);
+    }
+
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(node);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  const rows = useMemo(
+    () => buildVirtualTagRows(tags, viewportSize.width),
+    [tags, viewportSize.width],
+  );
+
+  const totalHeight = rows.length * TAG_ROW_HEIGHT;
+  const maxScrollTop = Math.max(0, totalHeight - viewportSize.height);
+  const effectiveScrollTop = Math.min(scrollTop, maxScrollTop);
+
+  useEffect(() => {
+    if (scrollTop === effectiveScrollTop) {
+      return;
+    }
+
+    setScrollTop(effectiveScrollTop);
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = effectiveScrollTop;
+    }
+  }, [effectiveScrollTop, scrollTop]);
+
+  const startIndex = Math.max(
+    0,
+    Math.floor(effectiveScrollTop / TAG_ROW_HEIGHT) - TAG_ROW_OVERSCAN,
+  );
+  const visibleRowCount = Math.ceil(viewportSize.height / TAG_ROW_HEIGHT) + TAG_ROW_OVERSCAN * 2;
+  const endIndex = Math.min(rows.length, startIndex + visibleRowCount);
+  const visibleRows = rows.slice(startIndex, endIndex);
+
+  return (
+    <div
+      ref={scrollRef}
+      className="min-h-[120px] flex-1 overflow-y-auto pr-1"
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <div className="relative" style={{ height: totalHeight }}>
+        <div
+          className="absolute left-0 right-0 top-0"
+          style={{ transform: `translateY(${startIndex * TAG_ROW_HEIGHT}px)` }}
+        >
+          {visibleRows.map((row, rowOffset) => {
+            const rowIndex = startIndex + rowOffset;
+
+            return (
+              <div
+                key={`${rowIndex}-${row[0]?.tag_id ?? 'empty'}`}
+                className="flex items-start gap-1.5"
+                style={{ height: TAG_ROW_HEIGHT }}
+              >
+                {row.map((tag) => (
+                  <button
+                    type="button"
+                    key={tag.tag_id}
+                    title={`${tag.tag_name} (${tag.topic_count})`}
+                    onClick={() => onSelectTag(tag.tag_id)}
+                    className={`inline-flex max-w-full items-center rounded border px-1.5 py-0.5 text-xs font-medium transition-colors ${
+                      selectedTag === tag.tag_id
+                        ? 'border-blue-200 bg-blue-100 text-blue-800'
+                        : 'border-gray-200 bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    <span className="truncate">{tag.tag_name}</span>
+                    <span className="ml-1 flex-shrink-0 text-xs opacity-75">({tag.topic_count})</span>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+});
 
 export default function GroupDetailPage() {
   const params = useParams();
@@ -90,6 +264,11 @@ export default function GroupDetailPage() {
   const [topicDetails, setTopicDetails] = useState<Map<string, any>>(new Map());
   const inFlightRef = useRef<Map<string, Promise<any>>>(new Map());
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  const handleSelectTag = useCallback((tagId: number) => {
+    setSelectedTag((currentTag) => (currentTag === tagId ? null : tagId));
+    setCurrentPage(1);
+  }, []);
 
 
 
@@ -286,7 +465,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
       let data;
       if (selectedTag) {
         // 如果选择了标签，使用标签过滤API
-        data = await apiClient.getTagTopics(parseInt(groupId), selectedTag, currentPage, 20);
+        data = await apiClient.getTagTopics(groupId, selectedTag, currentPage, 20);
       } else {
         // 否则使用原有的API
         data = await apiClient.getGroupTopics(groupId, currentPage, 20, searchTerm || undefined);
@@ -353,7 +532,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
 
   const loadGroupInfo = async () => {
     try {
-      const info = await apiClient.getGroupInfo(parseInt(groupId));
+      const info = await apiClient.getGroupInfo(groupId);
       setGroupInfo(info);
     } catch (error) {
       console.error('加载群组信息失败:', error);
@@ -362,7 +541,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
 
   const loadLocalFileCount = async () => {
     try {
-      const stats = await apiClient.getFileStats(parseInt(groupId));
+      const stats = await apiClient.getFileStats(groupId);
       // 使用特定群组的文件统计数据
       setLocalFileCount(stats.download_stats.total_files || 0);
     } catch (error) {
@@ -375,7 +554,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   const loadTags = async () => {
     setTagsLoading(true);
     try {
-      const data = await apiClient.getGroupTags(parseInt(groupId));
+      const data = await apiClient.getGroupTags(groupId);
       setTags(data.tags || []);
     } catch (error) {
       console.error('Failed to load tags:', error);
@@ -622,7 +801,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   const handleCollectFiles = async () => {
     try {
       setFileLoading('collect');
-      const response = await apiClient.collectFiles();
+      const response = await apiClient.collectFiles(groupId);
       toast.success(`文件收集任务已创建: ${(response as any).task_id}`);
       // 设置当前任务ID以显示日志
       setCurrentTaskId((response as any).task_id);
@@ -639,7 +818,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     try {
       setFileLoading('download-time');
       const response = await apiClient.downloadFiles(
-        parseInt(groupId),
+        groupId,
         undefined,
         'create_time',
         downloadInterval,
@@ -666,7 +845,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     try {
       setFileLoading('download-count');
       const response = await apiClient.downloadFiles(
-        parseInt(groupId),
+        groupId,
         undefined,
         'download_count',
         downloadInterval,
@@ -692,7 +871,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   const handleClearFileDatabase = async () => {
     try {
       setFileLoading('clear');
-      const response = await apiClient.clearFileDatabase(parseInt(groupId));
+      const response = await apiClient.clearFileDatabase(groupId);
       toast.success(`文件数据库已删除`);
       // 重新加载本地文件数量
       loadLocalFileCount();
@@ -752,13 +931,14 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   };
 
   // 切换评论展开状态
-  const toggleComments = (topicId: number) => {
+  const toggleComments = (topicId: number | string) => {
+    const key = String(topicId);
     setExpandedComments(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(topicId)) {
-        newSet.delete(topicId);
+      if (newSet.has(key)) {
+        newSet.delete(key);
       } else {
-        newSet.add(topicId);
+        newSet.add(key);
       }
       return newSet;
     });
@@ -775,7 +955,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     setRefreshingTopics(prev => new Set(prev).add(topicId));
 
     try {
-      const response = await apiClient.refreshTopic(parseInt(topicId.toString()), parseInt(groupId));
+      const response = await apiClient.refreshTopic(parseInt(topicId.toString()), groupId);
 
       if (response.success) {
         toast.success(`${response.message} - 点赞:${response.updated_data.likes_count} 评论:${response.updated_data.comments_count}`);
@@ -1074,13 +1254,14 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
   };
 
   // 切换内容展开状态
-  const toggleContent = (topicId: number) => {
+  const toggleContent = (topicId: number | string) => {
+    const key = String(topicId);
     setExpandedContent(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(topicId)) {
-        newSet.delete(topicId);
+      if (newSet.has(key)) {
+        newSet.delete(key);
       } else {
-        newSet.add(topicId);
+        newSet.add(key);
       }
       return newSet;
     });
@@ -1972,10 +2153,10 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
       {/* 三列布局 - 使用flex布局，左右固定，中间滚动 */}
       <div className="flex-1 flex gap-4 px-4 pb-4 min-h-0">
         {/* 左侧：社群信息 - 固定宽度，使用sticky定位 */}
-        <div className="w-80 flex-shrink-0 sticky top-0 h-fit max-h-screen">
-          <Card className="border border-gray-200 shadow-none h-full">
+        <div className="w-80 flex-shrink-0 h-full min-h-0">
+          <Card className="border border-gray-200 shadow-none h-full min-h-0">
             <ScrollArea className="h-full">
-              <CardContent className="p-4 flex flex-col">
+              <CardContent className="p-4 flex h-full min-h-0 flex-col">
                 <div className="flex items-center gap-3 mb-4">
                   <SafeImage
                     src={group.background_url}
@@ -2071,7 +2252,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                 </div>
 
                 {/* 标签区域 */}
-                <div className="mt-6 border-t border-gray-200 pt-4">
+                <div className="mt-6 flex min-h-0 flex-1 flex-col border-t border-gray-200 pt-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-medium text-gray-900">话题标签</h3>
                     {selectedTag && (
@@ -2094,27 +2275,11 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                   ) : tags.length === 0 ? (
                     <div className="text-xs text-gray-500">暂无标签</div>
                   ) : (
-                    <div className="max-h-80 overflow-y-auto">
-                      <div className="flex flex-wrap gap-1.5">
-                        {tags.map((tag) => (
-                          <button type="button"
-                            key={tag.tag_id}
-                            onClick={() => {
-                              setSelectedTag(selectedTag === tag.tag_id ? null : tag.tag_id);
-                              setCurrentPage(1);
-                            }}
-                            className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium transition-colors ${
-                              selectedTag === tag.tag_id
-                                ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200'
-                            }`}
-                          >
-                            {tag.tag_name}
-                            <span className="ml-1 text-xs opacity-75">({tag.topic_count})</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    <VirtualizedTagList
+                      tags={tags}
+                      selectedTag={selectedTag}
+                      onSelectTag={handleSelectTag}
+                    />
                   )}
                 </div>
               </CardContent>
@@ -2274,7 +2439,11 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
             <ScrollArea className="h-full">
               <CardContent className="p-4">
                 {/* 模式切换 */}
-                <Tabs value={activeMode} onValueChange={setActiveMode} className="space-y-4">
+                <Tabs
+                  value={activeMode}
+                  onValueChange={(value) => setActiveMode(value as 'crawl' | 'download')}
+                  className="space-y-4"
+                >
                   <TabsList className="grid w-full grid-cols-2">
                     <TabsTrigger value="crawl" className="text-xs">
                       <MessageSquare className="h-3 w-3 mr-1" />
