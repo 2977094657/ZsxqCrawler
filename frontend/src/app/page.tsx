@@ -79,12 +79,12 @@ export default function Home() {
   }
 
   // 检查是否已配置
-  if (stats && stats.configured === false) {
+  if (stats && stats.configured === false && !stats.has_local_data) {
     return <ConfigPanel onConfigSaved={loadStats} />;
   }
 
-  // 如果已配置但未选择群组，显示群组选择界面
-  if (stats && stats.configured !== false && !selectedGroup) {
+  // 如果已配置或已有本地导入数据但未选择群组，显示群组选择界面
+  if (stats && (stats.configured !== false || stats.has_local_data) && !selectedGroup) {
     return <GroupSelector onGroupSelected={setSelectedGroup} />;
   }
 
@@ -138,13 +138,13 @@ export default function Home() {
                     <div className="flex gap-6 text-center">
                       <div>
                         <div className="text-base font-semibold">
-                          {selectedGroup.statistics.members_count || 0}
+                          {selectedGroup.statistics.members?.count || 0}
                         </div>
                         <div className="text-xs text-muted-foreground">成员</div>
                       </div>
                       <div>
                         <div className="text-base font-semibold">
-                          {selectedGroup.statistics.topics_count || 0}
+                          {selectedGroup.statistics.topics?.topics_count || 0}
                         </div>
                         <div className="text-xs text-muted-foreground">话题</div>
                       </div>

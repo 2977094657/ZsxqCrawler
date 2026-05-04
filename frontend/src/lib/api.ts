@@ -21,8 +21,20 @@ export interface Task {
   updated_at: string;
 }
 
+export interface TaskCreateResponse {
+  task_id: string;
+  message: string;
+}
+
+export interface SimpleResponse {
+  success: boolean;
+  message: string;
+  [key: string]: unknown;
+}
+
 export interface DatabaseStats {
   configured?: boolean;
+  has_local_data?: boolean;
   topic_database: {
     stats: Record<string, number>;
     timestamp_info: {
@@ -67,6 +79,32 @@ export interface FileStatus {
   local_path?: string;
   is_complete: boolean;
 }
+
+export interface FileStats {
+  database_stats: Record<string, number>;
+  download_stats: {
+    total_files: number;
+    downloaded: number;
+    pending: number;
+    failed: number;
+  };
+}
+
+export type RefreshTopicResponse =
+  | {
+      success: true;
+      message: string;
+      updated_data: {
+        likes_count: number;
+        comments_count: number;
+        reading_count: number;
+        readers_count: number;
+      };
+    }
+  | {
+      success: false;
+      message: string;
+    };
 
 export interface PaginatedResponse<T> {
   data: T[];
@@ -127,10 +165,83 @@ export interface GroupStats {
   total_comments: number;
   total_readings: number;
 }
+
+export interface GroupTag {
+  tag_id: number;
+  tag_name: string;
+  hid?: string;
+  topic_count: number;
+  created_at?: string;
+}
+
+export interface ExportManifestGroup {
+  group_id: string;
+  name: string;
+  type?: string;
+  background_url?: string;
+  cover_url?: string;
+  cover_image_data_url?: string;
+  owner?: {
+    user_id?: number;
+    name?: string;
+    alias?: string;
+    avatar_url?: string;
+    description?: string;
+  };
+  statistics?: Record<string, any>;
+  members_count?: number;
+  topics_count?: number;
+  files_count?: number;
+  description?: string;
+  create_time?: string;
+  subscription_time?: string;
+  join_time?: string;
+  expiry_time?: string;
+  last_active_time?: string;
+  status?: string;
+  is_trial?: boolean;
+  trial_end_time?: string;
+  membership_end_time?: string;
+  directory?: string;
+  size_bytes?: number;
+}
+
+export interface ExportManifest {
+  manifest_version: number;
+  app: string;
+  export_type: 'single_group' | 'all_output';
+  exported_at: string;
+  source_root: string;
+  data_size_bytes: number;
+  groups_count: number;
+  groups: ExportManifestGroup[];
+}
+
+export interface ImportConflict {
+  group_id: string;
+  paths: string[];
+}
+
+export interface ImportPreview {
+  success: boolean;
+  manifest: ExportManifest;
+  groups: ExportManifestGroup[];
+  conflicts: ImportConflict[];
+  can_import: boolean;
+}
+
+export interface ImportConfirmResult {
+  success: boolean;
+  message: string;
+  manifest: ExportManifest;
+  groups: ExportManifestGroup[];
+}
+
 export interface Account {
   id: string;
   name?: string;
   cookie?: string; // 已掩码
+  is_default?: boolean;
   created_at?: string;
 }
 
@@ -214,13 +325,13 @@ class ApiClient {
   }
 
   // 爬取相关
-  async crawlHistorical(groupId: number, pages: number = 10, perPage: number = 20, crawlSettings?: {
+  async crawlHistorical(groupId: number | string, pages: number = 10, perPage: number = 20, crawlSettings?: {
     crawlIntervalMin?: number;
     crawlIntervalMax?: number;
     longSleepIntervalMin?: number;
     longSleepIntervalMax?: number;
     pagesPerBatch?: number;
-  }) {
+  }): Promise<TaskCreateResponse> {
     return this.request(`/api/crawl/historical/${groupId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -231,26 +342,26 @@ class ApiClient {
     });
   }
 
-  async crawlAll(groupId: number, crawlSettings?: {
+  async crawlAll(groupId: number | string, crawlSettings?: {
     crawlIntervalMin?: number;
     crawlIntervalMax?: number;
     longSleepIntervalMin?: number;
     longSleepIntervalMax?: number;
     pagesPerBatch?: number;
-  }) {
+  }): Promise<TaskCreateResponse> {
     return this.request(`/api/crawl/all/${groupId}`, {
       method: 'POST',
       body: JSON.stringify(crawlSettings || {}),
     });
   }
 
-  async crawlIncremental(groupId: number, pages: number = 10, perPage: number = 20, crawlSettings?: {
+  async crawlIncremental(groupId: number | string, pages: number = 10, perPage: number = 20, crawlSettings?: {
     crawlIntervalMin?: number;
     crawlIntervalMax?: number;
     longSleepIntervalMin?: number;
     longSleepIntervalMax?: number;
     pagesPerBatch?: number;
-  }) {
+  }): Promise<TaskCreateResponse> {
     return this.request(`/api/crawl/incremental/${groupId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -261,26 +372,26 @@ class ApiClient {
     });
   }
 
-  async crawlLatestUntilComplete(groupId: number, crawlSettings?: {
+  async crawlLatestUntilComplete(groupId: number | string, crawlSettings?: {
     crawlIntervalMin?: number;
     crawlIntervalMax?: number;
     longSleepIntervalMin?: number;
     longSleepIntervalMax?: number;
     pagesPerBatch?: number;
-  }) {
+  }): Promise<TaskCreateResponse> {
     return this.request(`/api/crawl/latest-until-complete/${groupId}`, {
       method: 'POST',
       body: JSON.stringify(crawlSettings || {}),
     });
   }
 
-  async getTopicDetail(topicId: number | string, groupId: number) {
+  async getTopicDetail(topicId: number | string, groupId: number | string) {
     // 统一转为字符串，避免大整数在前端被 Number 处理后精度丢失
     const id = String(topicId);
     return this.request(`/api/topics/${id}/${groupId}`);
   }
 
-  async refreshTopic(topicId: number | string, groupId: number) {
+  async refreshTopic(topicId: number | string, groupId: number | string): Promise<RefreshTopicResponse> {
     const id = String(topicId);
     return this.request(`/api/topics/${id}/${groupId}/refresh`, {
       method: 'POST',
@@ -341,27 +452,33 @@ class ApiClient {
   }
 
   // 图片缓存管理
-  async getImageCacheInfo(groupId: string) {
+  async getImageCacheInfo(groupId: string): Promise<Record<string, unknown>> {
     return this.request(`/api/cache/images/info/${groupId}`);
   }
 
-  async clearImageCache(groupId: string) {
+  async clearImageCache(groupId: string): Promise<SimpleResponse> {
     return this.request(`/api/cache/images/${groupId}`, {
       method: 'DELETE',
     });
   }
 
   // 群组相关
-  async getGroupInfo(groupId: number) {
+  async getGroupInfo(groupId: number | string): Promise<Record<string, unknown>> {
     return this.request(`/api/groups/${groupId}/info`);
   }
 
   // 文件相关
-  async downloadFiles(groupId: number, maxFiles?: number, sortBy: string = 'download_count',
+  async collectFiles(groupId: number | string): Promise<TaskCreateResponse> {
+    return this.request(`/api/files/collect/${groupId}`, {
+      method: 'POST',
+    });
+  }
+
+  async downloadFiles(groupId: number | string, maxFiles?: number, sortBy: string = 'download_count',
                      downloadInterval: number = 1.0, longSleepInterval: number = 60.0,
                      filesPerBatch: number = 10, downloadIntervalMin?: number,
                      downloadIntervalMax?: number, longSleepIntervalMin?: number,
-                     longSleepIntervalMax?: number) {
+                     longSleepIntervalMax?: number): Promise<TaskCreateResponse> {
     const requestBody: any = {
       max_files: maxFiles,
       sort_by: sortBy,
@@ -384,23 +501,23 @@ class ApiClient {
     });
   }
 
-  async clearFileDatabase(groupId: number) {
+  async clearFileDatabase(groupId: number | string) {
     return this.request(`/api/files/clear/${groupId}`, {
       method: 'POST',
     });
   }
 
-  async clearTopicDatabase(groupId: number) {
+  async clearTopicDatabase(groupId: number | string) {
     return this.request(`/api/topics/clear/${groupId}`, {
       method: 'POST',
     });
   }
 
-  async getFileStats(groupId: number) {
+  async getFileStats(groupId: number | string): Promise<FileStats> {
     return this.request(`/api/files/stats/${groupId}`);
   }
 
-  async downloadSingleFile(groupId: string, fileId: number, fileName?: string, fileSize?: number) {
+  async downloadSingleFile(groupId: number | string, fileId: number, fileName?: string, fileSize?: number): Promise<TaskCreateResponse> {
     const params = new URLSearchParams();
     if (fileName) params.append('file_name', fileName);
     if (fileSize !== undefined) params.append('file_size', fileSize.toString());
@@ -411,11 +528,11 @@ class ApiClient {
     });
   }
 
-  async getFileStatus(groupId: string, fileId: number) {
+  async getFileStatus(groupId: number | string, fileId: number): Promise<FileStatus> {
     return this.request(`/api/files/status/${groupId}/${fileId}`);
   }
 
-  async checkLocalFileStatus(groupId: string, fileName: string, fileSize: number) {
+  async checkLocalFileStatus(groupId: number | string, fileName: string, fileSize: number): Promise<Record<string, unknown>> {
     const params = new URLSearchParams({
       file_name: fileName,
       file_size: fileSize.toString(),
@@ -441,7 +558,7 @@ class ApiClient {
     };
   }
 
-  async getFiles(groupId: number, page: number = 1, perPage: number = 20, status?: string): Promise<PaginatedResponse<FileItem>> {
+  async getFiles(groupId: number | string, page: number = 1, perPage: number = 20, status?: string): Promise<PaginatedResponse<FileItem>> {
     const params = new URLSearchParams({
       page: page.toString(),
       per_page: perPage.toString(),
@@ -469,7 +586,7 @@ class ApiClient {
     return this.request('/api/groups');
   }
 
-  async getGroupTopics(groupId: number, page: number = 1, perPage: number = 20, search?: string): Promise<PaginatedResponse<Topic>> {
+  async getGroupTopics(groupId: number | string, page: number = 1, perPage: number = 20, search?: string): Promise<PaginatedResponse<Topic>> {
     // 🧪 调试输出：请求参数
     console.log('[apiClient.getGroupTopics] request params:', { groupId, page, perPage, search });
 
@@ -521,12 +638,50 @@ class ApiClient {
     return result;
   }
 
-  async getGroupStats(groupId: number): Promise<GroupStats> {
+  async getGroupStats(groupId: number | string): Promise<GroupStats> {
     return this.request(`/api/groups/${groupId}/stats`);
   }
 
+  getGroupExportUrl(groupId: number | string): string {
+    return `${this.baseUrl}/api/groups/${groupId}/export`;
+  }
+
+  getAllExportUrl(): string {
+    return `${this.baseUrl}/api/export/all`;
+  }
+
+  async previewImportArchive(file: File): Promise<ImportPreview> {
+    return this.uploadZip<ImportPreview>('/api/import/preview', file);
+  }
+
+  async confirmImportArchive(file: File): Promise<ImportConfirmResult> {
+    return this.uploadZip<ImportConfirmResult>('/api/import/confirm', file);
+  }
+
+  private async uploadZip<T>(endpoint: string, file: File): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/zip',
+        'X-Filename': encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const detail = errorData.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : detail?.message || `HTTP ${response.status}: ${response.statusText}`;
+      throw new Error(message);
+    }
+
+    return response.json();
+  }
+
   // 获取群组专栏摘要信息
-  async getGroupColumnsSummary(groupId: number): Promise<{
+  async getGroupColumnsSummary(groupId: number | string): Promise<{
     has_columns: boolean;
     title: string | null;
     error?: string;
@@ -534,11 +689,11 @@ class ApiClient {
     return this.request(`/api/groups/${groupId}/columns/summary`);
   }
 
-  async getGroupTags(groupId: number) {
+  async getGroupTags(groupId: number | string): Promise<{ tags: GroupTag[]; total: number }> {
     return this.request(`/api/groups/${groupId}/tags`);
   }
 
-  async getTagTopics(groupId: number, tagId: number, page: number = 1, perPage: number = 20): Promise<PaginatedResponse<Topic>> {
+  async getTagTopics(groupId: number | string, tagId: number, page: number = 1, perPage: number = 20): Promise<PaginatedResponse<Topic>> {
     const params = new URLSearchParams({
       page: page.toString(),
       per_page: perPage.toString(),
@@ -656,7 +811,7 @@ class ApiClient {
     });
   }
   async crawlByTimeRange(
-    groupId: number,
+    groupId: number | string,
     params: {
       startTime?: string;
       endTime?: string;
@@ -668,7 +823,7 @@ class ApiClient {
       longSleepIntervalMax?: number;
       pagesPerBatch?: number;
     }
-  ) {
+  ): Promise<TaskCreateResponse> {
     return this.request(`/api/crawl/range/${groupId}`, {
       method: 'POST',
       body: JSON.stringify(params || {}),

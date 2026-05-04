@@ -1,17 +1,19 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { MessageSquare, Crown, UserCog, RefreshCw, Trash2, Loader2 } from 'lucide-react';
-import { apiClient, Group, GroupStats } from '@/lib/api';
+import { MessageSquare, Crown, UserCog, RefreshCw, Trash2, Loader2, Download, Upload } from 'lucide-react';
+import { apiClient, Group, GroupStats, ImportPreview } from '@/lib/api';
 import { toast } from 'sonner';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import SafeImage from './SafeImage';
+import ImportGroupPreviewCard from './ImportGroupPreviewCard';
 import '../styles/group-selector.css';
 
 interface GroupSelectorProps {
@@ -35,6 +37,13 @@ export default function GroupSelector(_props: GroupSelectorProps) {
   const [isRetrying, setIsRetrying] = useState(false);
   const [deletingGroups, setDeletingGroups] = useState<Set<number>>(new Set());
   const [resettingAll, setResettingAll] = useState(false);
+  const [exportingGroups, setExportingGroups] = useState<Set<number>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [importPreviewing, setImportPreviewing] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   // 当前激活的来源筛选标签
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   // 用户点击某个群组卡片后正在跳转到详情页的群组 id；用于立即显示全屏加载遮罩
@@ -267,12 +276,99 @@ export default function GroupSelector(_props: GroupSelectorProps) {
     }
   };
 
+  const triggerDownload = (url: string) => {
+    window.location.href = url;
+  };
+
+  const handleExportGroup = (groupId: number) => {
+    if (exportingGroups.has(groupId)) return;
+    setExportingGroups((prev) => new Set(prev).add(groupId));
+    triggerDownload(apiClient.getGroupExportUrl(groupId));
+    window.setTimeout(() => {
+      setExportingGroups((prev) => {
+        const s = new Set(prev);
+        s.delete(groupId);
+        return s;
+      });
+    }, 1200);
+  };
+
+  const handleExportAll = () => {
+    triggerDownload(apiClient.getAllExportUrl());
+  };
+
+  const formatBytes = (bytes?: number) => {
+    if (!bytes || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = bytes;
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+      value /= 1024;
+      index += 1;
+    }
+    return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+  };
+
+  const handleImportFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      toast.error('请选择 zip 文件');
+      return;
+    }
+    setImportFile(file);
+    setImportPreview(null);
+    setImportPreviewing(true);
+    try {
+      const preview = await apiClient.previewImportArchive(file);
+      setImportPreview(preview);
+      setImportDialogOpen(true);
+      if (preview.conflicts.length > 0) {
+        toast.warning('导入包中存在已本地存在的社群，请先删除后再导入');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`读取导入包失败: ${msg}`);
+      setImportFile(null);
+    } finally {
+      setImportPreviewing(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!importFile || importing || !importPreview?.can_import) return;
+    setImporting(true);
+    try {
+      const result = await apiClient.confirmImportArchive(importFile);
+      toast.success(result.message || '导入成功');
+      setImportDialogOpen(false);
+      setImportFile(null);
+      setImportPreview(null);
+      await loadGroups(0);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`导入失败: ${msg}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const formatDate = (dateString?: string) => {
     if (!dateString) return '';
     try {
       return new Date(dateString).toLocaleDateString('zh-CN');
     } catch {
       return '';
+    }
+  };
+
+  const formatDateTime = (dateString?: string) => {
+    if (!dateString) return '';
+    try {
+      return new Date(dateString).toLocaleString('zh-CN');
+    } catch {
+      return dateString;
     }
   };
 
@@ -413,7 +509,7 @@ export default function GroupSelector(_props: GroupSelectorProps) {
             )}
           </div>
 
-          {/* 来源标签 + 状态标签 + 删除按钮 */}
+          {/* 来源标签 + 状态标签 + 操作按钮 */}
           <div className="flex items-center justify-between gap-1.5">
             <div className="flex items-center gap-1 flex-wrap">
               {/* 来源指示标签：只保留"网络"，"本地"已移至群主名字右侧 */}
@@ -455,40 +551,57 @@ export default function GroupSelector(_props: GroupSelectorProps) {
               ))}
             </div>
 
-            {/* 删除按钮 */}
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); }}
-                  className="p-1 text-muted-foreground/70 hover:text-destructive transition-colors"
-                  title="删除本地数据"
-                  disabled={deletingGroups.has(group.group_id)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </AlertDialogTrigger>
-              <AlertDialogContent onClick={(e) => e.stopPropagation()}>
-                <AlertDialogHeader>
-                  <AlertDialogTitle className="text-destructive">确认删除该社群的本地数据</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/30"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteGroup(group.group_id);
-                    }}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleExportGroup(group.group_id);
+                }}
+                className="p-1 text-muted-foreground/70 hover:text-primary transition-colors"
+                title="导出社群数据"
+                disabled={exportingGroups.has(group.group_id)}
+              >
+                {exportingGroups.has(group.group_id) ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); }}
+                    className="p-1 text-muted-foreground/70 hover:text-destructive transition-colors"
+                    title="删除本地数据"
+                    disabled={deletingGroups.has(group.group_id)}
                   >
-                    确认删除
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </AlertDialogTrigger>
+                <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="text-destructive">确认删除该社群的本地数据</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      此操作将删除该社群的本地数据库、下载文件与图片缓存，不会影响账号对该社群的访问权限。操作不可恢复。
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel onClick={(e) => e.stopPropagation()}>取消</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/30"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteGroup(group.group_id);
+                      }}
+                    >
+                      确认删除
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
           </div>
         </div>
       </div>
@@ -514,6 +627,34 @@ export default function GroupSelector(_props: GroupSelectorProps) {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                className="hidden"
+                onChange={handleImportFileChange}
+              />
+              <Button
+                variant="outline"
+                onClick={() => importInputRef.current?.click()}
+                disabled={importPreviewing || importing}
+                className="flex items-center gap-2"
+              >
+                {importPreviewing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                导入
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleExportAll}
+                className="flex items-center gap-2"
+              >
+                <Download className="h-4 w-4" />
+                全部导出
+              </Button>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
@@ -622,6 +763,90 @@ export default function GroupSelector(_props: GroupSelectorProps) {
           </div>
         )}
       </div>
+
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>确认导入数据包</DialogTitle>
+            <DialogDescription>
+              导入前请确认压缩包中的导出时间、数据大小和社群列表。已存在的社群不会被覆盖。
+            </DialogDescription>
+          </DialogHeader>
+          {importPreview && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-lg border border-border p-2.5">
+                  <div className="text-xs text-muted-foreground mb-1">导出时间</div>
+                  <div className="text-sm font-medium">
+                    {formatDateTime(importPreview.manifest.exported_at) || importPreview.manifest.exported_at}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border p-2.5">
+                  <div className="text-xs text-muted-foreground mb-1">数据大小</div>
+                  <div className="text-sm font-medium">{formatBytes(importPreview.manifest.data_size_bytes)}</div>
+                </div>
+                <div className="rounded-lg border border-border p-2.5">
+                  <div className="text-xs text-muted-foreground mb-1">社群数量</div>
+                  <div className="text-sm font-medium">{importPreview.manifest.groups_count}</div>
+                </div>
+              </div>
+
+              {importPreview.conflicts.length > 0 && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                  <div className="text-sm font-medium text-destructive mb-1">存在冲突，无法导入</div>
+                  <div className="text-xs text-muted-foreground">
+                    以下社群的本地文件夹已存在，请先删除已有本地数据后再导入。
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {importPreview.conflicts.map((conflict) => (
+                      <Badge key={conflict.group_id} variant="destructive">
+                        ID: {conflict.group_id}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-lg border border-border">
+                <div className="px-3 py-2 text-sm font-medium border-b border-border">
+                  将导入的社群
+                </div>
+                <div className="max-h-72 overflow-y-auto p-2.5">
+                  <div className="grid grid-cols-1 gap-2">
+                  {importPreview.groups.map((group) => (
+                    <ImportGroupPreviewCard
+                      key={group.group_id}
+                      group={group}
+                      conflicted={importPreview.conflicts.some((conflict) => conflict.group_id === group.group_id)}
+                    />
+                  ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setImportDialogOpen(false);
+                setImportFile(null);
+                setImportPreview(null);
+              }}
+              disabled={importing}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={handleConfirmImport}
+              disabled={importing || !importPreview?.can_import}
+            >
+              {importing && <Loader2 className="h-4 w-4 animate-spin" />}
+              确认导入
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 全屏导航加载遮罩：点击群组卡片后立即显示，给用户即时反馈，
           避免详情页首屏 chunk 下载或后端 /api/groups 请求时出现"无反应"的错觉。 */}

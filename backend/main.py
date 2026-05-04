@@ -6,26 +6,33 @@
 import os
 import sys
 import asyncio
+import base64
 import gc
 import shutil
+import io
+import posixpath
+import sqlite3
+import tempfile
+import zipfile
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from contextlib import asynccontextmanager
 import json
 import requests
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, FileResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 import uvicorn
 import mimetypes
 import random
 import time
 from urllib.parse import urlparse
 
-# 添加项目根目录到Python路径（现在main.py就在根目录）
-project_root = os.path.dirname(os.path.abspath(__file__))
+# 添加项目根目录到 Python 路径（后端代码位于 backend 包内）
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -536,6 +543,719 @@ def close_runtime_handles() -> None:
     except Exception as e:
         print(f"⚠️ 清理图片缓存管理器失败: {e}")
 
+
+def _get_output_dir() -> str:
+    return LOCAL_OUTPUT_DIR if os.path.isabs(LOCAL_OUTPUT_DIR) else os.path.join(project_root, LOCAL_OUTPUT_DIR)
+
+
+def _open_local_topics_db(group_id: str) -> ZSXQDatabase:
+    path_manager = get_db_path_manager()
+    db_path = path_manager.get_topics_db_path(str(group_id))
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail=f"群组 {group_id} 本地话题数据库不存在")
+    return ZSXQDatabase(db_path)
+
+
+def _open_local_files_db(group_id: str) -> ZSXQFileDatabase:
+    path_manager = get_db_path_manager()
+    db_path = path_manager.get_files_db_path(str(group_id))
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail=f"群组 {group_id} 本地文件数据库不存在")
+    return ZSXQFileDatabase(db_path)
+
+
+def _is_safe_zip_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    if not normalized or normalized.startswith("/"):
+        return False
+    drive, _ = os.path.splitdrive(normalized)
+    if drive:
+        return False
+    parts = [part for part in normalized.split("/") if part]
+    return bool(parts) and all(part not in {".", ".."} for part in parts)
+
+
+def _safe_zip_join(base_dir: str, archive_path: str) -> str:
+    if not _is_safe_zip_path(archive_path):
+        raise HTTPException(status_code=400, detail=f"压缩包包含非法路径: {archive_path}")
+    target = os.path.abspath(os.path.join(base_dir, *archive_path.replace("\\", "/").split("/")))
+    base_abs = os.path.abspath(base_dir)
+    if target != base_abs and not target.startswith(base_abs + os.sep):
+        raise HTTPException(status_code=400, detail=f"压缩包路径越界: {archive_path}")
+    return target
+
+
+def _is_ignored_export_import_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    filename = posixpath.basename(normalized)
+    if not filename:
+        return False
+    if filename.endswith(("-wal", "-shm")):
+        return True
+    if filename in {"zsxq_config.db", "zsxq_config.db-wal", "zsxq_config.db-shm"}:
+        return True
+    return False
+
+
+def _get_directory_size(path: str) -> int:
+    total = 0
+    if not os.path.exists(path):
+        return total
+    for root, _, files in os.walk(path):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, path).replace("\\", "/")
+            if _is_ignored_export_import_path(rel_path):
+                continue
+            try:
+                if os.path.isfile(file_path):
+                    total += os.path.getsize(file_path)
+            except OSError:
+                continue
+    return total
+
+
+def _load_group_meta_from_file(group_dir: str) -> Dict[str, Any]:
+    meta_path = os.path.join(group_dir, "group_meta.json")
+    if not os.path.exists(meta_path):
+        return {}
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _safe_int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _normalize_group_statistics(statistics: Any, *, topics_count: Optional[int] = None,
+                                users_count: Optional[int] = None,
+                                files_count: Optional[int] = None) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = dict(statistics) if isinstance(statistics, dict) else {}
+    members = normalized.get("members") if isinstance(normalized.get("members"), dict) else {}
+    topics = normalized.get("topics") if isinstance(normalized.get("topics"), dict) else {}
+    files = normalized.get("files") if isinstance(normalized.get("files"), dict) else {}
+
+    member_count = members.get("count", normalized.get("members_count"))
+    topic_count = topics.get("topics_count", normalized.get("topics_count"))
+    answer_count = topics.get("answers_count", normalized.get("answers_count"))
+    digest_count = topics.get("digests_count", normalized.get("digests_count"))
+    file_count = files.get("count", normalized.get("files_count"))
+
+    if topics_count is not None and not topic_count:
+        topic_count = topics_count
+    if users_count is not None and not member_count:
+        member_count = users_count
+    if files_count is not None and not file_count:
+        file_count = files_count
+
+    normalized["members"] = {
+        **members,
+        "count": _safe_int_value(member_count),
+    }
+    normalized["topics"] = {
+        **topics,
+        "topics_count": _safe_int_value(topic_count),
+        "answers_count": _safe_int_value(answer_count),
+        "digests_count": _safe_int_value(digest_count),
+    }
+    normalized["files"] = {
+        **files,
+        "count": _safe_int_value(file_count),
+    }
+    normalized["members_count"] = normalized["members"]["count"]
+    normalized["topics_count"] = normalized["topics"]["topics_count"]
+    normalized["files_count"] = normalized["files"]["count"]
+    return normalized
+
+
+def _merge_group_statistics(*statistics_sources: Any) -> Dict[str, Any]:
+    """合并多来源统计，保留每个字段里可信的最大非零值。"""
+    merged = _normalize_group_statistics({})
+    for source in statistics_sources:
+        if not isinstance(source, dict):
+            continue
+        normalized = _normalize_group_statistics(source)
+        merged["members"]["count"] = max(
+            _safe_int_value(merged.get("members", {}).get("count")),
+            _safe_int_value(normalized.get("members", {}).get("count")),
+        )
+        merged["topics"]["topics_count"] = max(
+            _safe_int_value(merged.get("topics", {}).get("topics_count")),
+            _safe_int_value(normalized.get("topics", {}).get("topics_count")),
+        )
+        merged["topics"]["answers_count"] = max(
+            _safe_int_value(merged.get("topics", {}).get("answers_count")),
+            _safe_int_value(normalized.get("topics", {}).get("answers_count")),
+        )
+        merged["topics"]["digests_count"] = max(
+            _safe_int_value(merged.get("topics", {}).get("digests_count")),
+            _safe_int_value(normalized.get("topics", {}).get("digests_count")),
+        )
+        merged["files"]["count"] = max(
+            _safe_int_value(merged.get("files", {}).get("count")),
+            _safe_int_value(normalized.get("files", {}).get("count")),
+        )
+
+    merged["members_count"] = merged["members"]["count"]
+    merged["topics_count"] = merged["topics"]["topics_count"]
+    merged["files_count"] = merged["files"]["count"]
+    return merged
+
+
+def _apply_local_package_counts(statistics: Any, local_statistics: Any) -> Dict[str, Any]:
+    """
+    导入/导出包中的话题数、文件数应代表包内本地数据库的真实数据量；
+    成员数仍优先使用官方/元数据中的社群成员数，本地库仅作为兜底。
+    """
+    combined = _merge_group_statistics(statistics)
+    local = _normalize_group_statistics(local_statistics or {})
+    local_topics_count = _safe_int_value(local.get("topics", {}).get("topics_count"))
+    local_files_count = _safe_int_value(local.get("files", {}).get("count"))
+    local_members_count = _safe_int_value(local.get("members", {}).get("count"))
+
+    if local_topics_count > 0:
+        combined["topics"]["topics_count"] = local_topics_count
+    if local_files_count > 0:
+        combined["files"]["count"] = local_files_count
+    if not _safe_int_value(combined.get("members", {}).get("count")) and local_members_count > 0:
+        combined["members"]["count"] = local_members_count
+
+    combined["members_count"] = combined["members"]["count"]
+    combined["topics_count"] = combined["topics"]["topics_count"]
+    combined["files_count"] = combined["files"]["count"]
+    return combined
+
+
+def _sqlite_count(cursor: sqlite3.Cursor, query: str, params: tuple = ()) -> int:
+    try:
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return _safe_int_value(row[0] if row else 0)
+    except Exception:
+        return 0
+
+
+def _merge_group_meta(base: Dict[str, Any], extra: Dict[str, Any], *, override: bool = False) -> Dict[str, Any]:
+    if not isinstance(extra, dict):
+        return base
+    for key, value in extra.items():
+        if value in (None, "", {}, []):
+            continue
+        if override or base.get(key) in (None, "", {}, []):
+            base[key] = value
+    return base
+
+
+def _load_group_meta_from_db(group_id: str, group_dir: str) -> Dict[str, Any]:
+    topics_db = os.path.join(group_dir, f"zsxq_topics_{group_id}.db")
+    files_db = os.path.join(group_dir, f"zsxq_files_{group_id}.db")
+    meta: Dict[str, Any] = {}
+    topics_count = 0
+    users_count = 0
+    files_count = 0
+    topic_files_count = 0
+    answers_count = 0
+    digests_count = 0
+    conn = None
+    if os.path.exists(topics_db):
+        try:
+            conn = sqlite3.connect(topics_db)
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT name, type, background_url FROM groups WHERE CAST(group_id AS TEXT) = ? LIMIT 1", (str(group_id),))
+                row = cursor.fetchone()
+                if row:
+                    meta.update({
+                        "name": row[0],
+                        "type": row[1],
+                        "background_url": row[2],
+                    })
+            except Exception:
+                pass
+
+            topics_count = _sqlite_count(
+                cursor,
+                "SELECT COUNT(*) FROM topics WHERE CAST(group_id AS TEXT) = ?",
+                (str(group_id),),
+            )
+            if topics_count == 0:
+                topics_count = _sqlite_count(cursor, "SELECT COUNT(*) FROM topics")
+
+            users_count = _sqlite_count(
+                cursor,
+                """
+                SELECT COUNT(DISTINCT t.owner_user_id)
+                FROM talks t
+                JOIN topics tp ON t.topic_id = tp.topic_id
+                WHERE CAST(tp.group_id AS TEXT) = ?
+                """,
+                (str(group_id),),
+            )
+            if users_count == 0:
+                users_count = _sqlite_count(cursor, "SELECT COUNT(DISTINCT owner_user_id) FROM talks")
+
+            answers_count = _sqlite_count(
+                cursor,
+                "SELECT COUNT(*) FROM topics WHERE CAST(group_id AS TEXT) = ? AND answered = 1",
+                (str(group_id),),
+            )
+            digests_count = _sqlite_count(
+                cursor,
+                "SELECT COUNT(*) FROM topics WHERE CAST(group_id AS TEXT) = ? AND digested = 1",
+                (str(group_id),),
+            )
+            topic_files_count = _sqlite_count(cursor, "SELECT COUNT(*) FROM topic_files")
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+    if os.path.exists(files_db):
+        fconn = None
+        try:
+            fconn = sqlite3.connect(files_db)
+            fcursor = fconn.cursor()
+            fcursor.execute("SELECT COUNT(*) FROM files")
+            files_count = fcursor.fetchone()[0] or 0
+        except Exception:
+            files_count = 0
+        finally:
+            if fconn:
+                fconn.close()
+    if files_count == 0 and topic_files_count > 0:
+        files_count = topic_files_count
+    meta["statistics"] = _normalize_group_statistics(
+        {
+            "topics": {
+                "topics_count": topics_count,
+                "answers_count": answers_count,
+                "digests_count": digests_count,
+            }
+        },
+        topics_count=topics_count,
+        users_count=users_count,
+        files_count=files_count,
+    )
+    return meta
+
+
+def _account_group_to_meta(group: Dict[str, Any]) -> Dict[str, Any]:
+    user_specific = group.get("user_specific", {}) or {}
+    validity = user_specific.get("validity", {}) or {}
+    trial = user_specific.get("trial", {}) or {}
+    actual_expiry_time = trial.get("end_time") or validity.get("end_time")
+    return {
+        "group_id": group.get("group_id"),
+        "name": group.get("name", ""),
+        "type": group.get("type", ""),
+        "background_url": group.get("background_url", ""),
+        "owner": group.get("owner", {}) or {},
+        "statistics": _normalize_group_statistics(group.get("statistics", {}) or {}),
+        "description": group.get("description", ""),
+        "create_time": group.get("create_time"),
+        "subscription_time": validity.get("begin_time"),
+        "expiry_time": actual_expiry_time,
+        "join_time": user_specific.get("join_time"),
+        "last_active_time": user_specific.get("last_active_time"),
+        "status": group.get("status"),
+        "is_trial": bool(trial.get("end_time")),
+        "trial_end_time": trial.get("end_time"),
+        "membership_end_time": validity.get("end_time"),
+    }
+
+
+def _load_account_groups_meta_map() -> Dict[str, Dict[str, Any]]:
+    cookies: List[str] = []
+    primary_cookie = get_primary_cookie()
+    if primary_cookie:
+        cookies.append(primary_cookie)
+    try:
+        sql_mgr = get_accounts_sql_manager()
+        for account in sql_mgr.get_accounts(mask_cookie=False) or []:
+            cookie = (account.get("cookie") or "").strip()
+            if cookie and cookie != "your_cookie_here":
+                cookies.append(cookie)
+    except Exception:
+        pass
+
+    result: Dict[str, Dict[str, Any]] = {}
+    seen_cookies = set()
+    for cookie in cookies:
+        if cookie in seen_cookies:
+            continue
+        seen_cookies.add(cookie)
+        try:
+            for group in fetch_groups_from_api(cookie) or []:
+                gid = str(group.get("group_id") or "")
+                if gid and gid not in result:
+                    result[gid] = _account_group_to_meta(group)
+        except Exception:
+            continue
+    return result
+
+
+def _build_image_data_url(image_path: str) -> str:
+    try:
+        if not image_path or not os.path.exists(image_path):
+            return ""
+        if os.path.getsize(image_path) > 3 * 1024 * 1024:
+            return ""
+        content_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+        with open(image_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"
+    except Exception:
+        return ""
+
+
+def _get_group_cover_image_data_url(group_dir: str, cover_url: str) -> str:
+    if not cover_url:
+        return ""
+    try:
+        cache_manager = image_cache_module.ImageCacheManager(os.path.join(group_dir, "images"))
+        success, path, _ = cache_manager.download_and_cache(cover_url, timeout=8)
+        if success and path:
+            return _build_image_data_url(str(path))
+    except Exception:
+        return ""
+    return ""
+
+
+def _build_group_manifest_entry(group_id: str, group_dir: str,
+                                account_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    db_meta = _load_group_meta_from_db(group_id, group_dir)
+    file_meta = _load_group_meta_from_file(group_dir)
+    meta: Dict[str, Any] = {}
+    _merge_group_meta(meta, db_meta, override=True)
+    _merge_group_meta(meta, file_meta, override=True)
+    _merge_group_meta(meta, account_meta or {}, override=False)
+
+    meta_statistics = _merge_group_statistics(
+        file_meta.get("statistics") if isinstance(file_meta, dict) else {},
+        account_meta.get("statistics") if isinstance(account_meta, dict) else {},
+    )
+    statistics = _apply_local_package_counts(meta_statistics, db_meta.get("statistics") or {})
+    background_url = meta.get("background_url") or meta.get("cover_url") or ""
+    owner = meta.get("owner") or {}
+    topics_count = statistics.get("topics", {}).get("topics_count", 0)
+    members_count = statistics.get("members", {}).get("count", 0)
+    files_count = statistics.get("files", {}).get("count", 0)
+    return {
+        "group_id": str(group_id),
+        "name": meta.get("name") or f"本地群（{group_id}）",
+        "type": meta.get("type") or "local",
+        "background_url": background_url,
+        "cover_url": background_url,
+        "cover_image_data_url": _get_group_cover_image_data_url(group_dir, background_url),
+        "owner": owner,
+        "statistics": statistics,
+        "members_count": members_count,
+        "topics_count": topics_count,
+        "files_count": files_count,
+        "description": meta.get("description") or "",
+        "create_time": meta.get("create_time"),
+        "subscription_time": meta.get("subscription_time"),
+        "join_time": meta.get("join_time"),
+        "expiry_time": meta.get("expiry_time"),
+        "last_active_time": meta.get("last_active_time"),
+        "status": meta.get("status"),
+        "is_trial": meta.get("is_trial", False),
+        "trial_end_time": meta.get("trial_end_time"),
+        "membership_end_time": meta.get("membership_end_time"),
+        "directory": os.path.basename(group_dir),
+        "size_bytes": _get_directory_size(group_dir),
+    }
+
+
+def _find_group_dirs_under_output(output_dir: str) -> List[Dict[str, str]]:
+    results: List[Dict[str, str]] = []
+    candidates = [
+        output_dir,
+        os.path.join(output_dir, "databases"),
+    ]
+    seen = set()
+    for base in candidates:
+        if not os.path.isdir(base):
+            continue
+        for item in os.listdir(base):
+            item_path = os.path.join(base, item)
+            if item.isdigit() and os.path.isdir(item_path):
+                abs_path = os.path.abspath(item_path)
+                if abs_path in seen:
+                    continue
+                seen.add(abs_path)
+                results.append({"group_id": item, "path": item_path})
+    return results
+
+
+def _build_export_manifest(export_type: str, source_path: str, archive_root: str,
+                           groups: List[Dict[str, str]]) -> Dict[str, Any]:
+    exported_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    account_meta_map = _load_account_groups_meta_map()
+    group_entries = [
+        _build_group_manifest_entry(item["group_id"], item["path"], account_meta_map.get(str(item["group_id"])))
+        for item in sorted(groups, key=lambda x: x["group_id"])
+    ]
+    return {
+        "manifest_version": 1,
+        "app": "ZsxqCrawler",
+        "export_type": export_type,
+        "exported_at": exported_at,
+        "source_root": archive_root,
+        "data_size_bytes": _get_directory_size(source_path),
+        "groups_count": len(group_entries),
+        "groups": group_entries,
+    }
+
+
+def _zip_directory_with_manifest(source_path: str, archive_root: str, manifest: Dict[str, Any]) -> str:
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_path = temp.name
+    temp.close()
+    source_abs = os.path.abspath(source_path)
+    with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for root, dirs, files in os.walk(source_abs):
+            dirs.sort()
+            files.sort()
+            rel_dir = os.path.relpath(root, source_abs)
+            zip_dir = archive_root if rel_dir == "." else posixpath.join(archive_root, rel_dir.replace("\\", "/"))
+            if not files and not dirs:
+                zf.writestr(zip_dir.rstrip("/") + "/", "")
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                rel_file = os.path.relpath(file_path, source_abs).replace("\\", "/")
+                zip_name = posixpath.join(archive_root, rel_file)
+                if _is_ignored_export_import_path(zip_name):
+                    continue
+                zf.write(file_path, zip_name)
+    return temp_path
+
+
+def _find_group_db_entry(zip_entries: List[str], group_id: str, db_kind: str) -> Optional[str]:
+    """在导入包中查找指定社群的 topics/files 数据库。"""
+    expected_name = f"zsxq_{db_kind}_{group_id}.db"
+    matches = [
+        name for name in zip_entries
+        if name
+        and not name.endswith("/")
+        and posixpath.basename(name.rstrip("/")) == expected_name
+        and not _is_ignored_export_import_path(name)
+    ]
+    if not matches:
+        return None
+
+    group_segment = f"/{group_id}/"
+    preferred = [name for name in matches if group_segment in f"/{name}"]
+    return sorted(preferred or matches, key=len)[0]
+
+
+def _load_group_statistics_from_zip(zf: zipfile.ZipFile, zip_entries: List[str], group_id: str) -> Dict[str, Any]:
+    """
+    旧导出包的 manifest 可能没有正确写入本地话题/文件数量；
+    预览时直接读取包内 SQLite 数据库兜底，避免有数据却显示 0。
+    """
+    topics_entry = _find_group_db_entry(zip_entries, group_id, "topics")
+    files_entry = _find_group_db_entry(zip_entries, group_id, "files")
+    if not topics_entry and not files_entry:
+        return {}
+
+    with tempfile.TemporaryDirectory(prefix="zsxq_import_preview_") as temp_dir:
+        group_dir = os.path.join(temp_dir, str(group_id))
+        os.makedirs(group_dir, exist_ok=True)
+        for db_kind, entry in (("topics", topics_entry), ("files", files_entry)):
+            if not entry:
+                continue
+            target = os.path.join(group_dir, f"zsxq_{db_kind}_{group_id}.db")
+            try:
+                with zf.open(entry) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            except Exception:
+                continue
+        return _load_group_meta_from_db(str(group_id), group_dir).get("statistics", {})
+
+
+def _sync_group_count_fields(group: Dict[str, Any], statistics: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_group_statistics(statistics)
+    group["statistics"] = normalized
+    group["members_count"] = normalized["members"]["count"]
+    group["topics_count"] = normalized["topics"]["topics_count"]
+    group["files_count"] = normalized["files"]["count"]
+    return group
+
+
+def _enrich_import_manifest_with_archive_counts(archive_bytes: bytes, manifest: Dict[str, Any]) -> Dict[str, Any]:
+    groups = manifest.get("groups")
+    if not isinstance(groups, list):
+        return manifest
+
+    enriched_manifest = dict(manifest)
+    enriched_groups: List[Dict[str, Any]] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+            zip_entries = zf.namelist()
+            for group in groups:
+                if not isinstance(group, dict):
+                    enriched_groups.append(group)
+                    continue
+                enriched_group = dict(group)
+                group_id = str(enriched_group.get("group_id") or "")
+                local_statistics = _load_group_statistics_from_zip(zf, zip_entries, group_id)
+                statistics = _merge_group_statistics(enriched_group.get("statistics") or {}, local_statistics)
+                statistics = _apply_local_package_counts(statistics, local_statistics)
+                enriched_groups.append(_sync_group_count_fields(enriched_group, statistics))
+    except Exception:
+        return manifest
+
+    enriched_manifest["groups"] = enriched_groups
+    return enriched_manifest
+
+
+def _parse_import_archive(archive_bytes: bytes) -> Dict[str, Any]:
+    try:
+        zip_buffer = io.BytesIO(archive_bytes)
+        with zipfile.ZipFile(zip_buffer) as zf:
+            names = zf.namelist()
+            if "manifest.json" not in names:
+                raise HTTPException(status_code=400, detail="压缩包缺少根目录 manifest.json")
+            for name in names:
+                if not _is_safe_zip_path(name.rstrip("/")):
+                    raise HTTPException(status_code=400, detail=f"压缩包包含非法路径: {name}")
+            try:
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="manifest.json 不是有效的 JSON")
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="上传文件不是有效的 zip 压缩包")
+
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=400, detail="manifest.json 格式不正确")
+    if manifest.get("app") != "ZsxqCrawler":
+        raise HTTPException(status_code=400, detail="manifest.json 不是 ZsxqCrawler 导出包")
+    groups = manifest.get("groups")
+    if not isinstance(groups, list):
+        raise HTTPException(status_code=400, detail="manifest.json 缺少社群信息")
+
+    group_ids = []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise HTTPException(status_code=400, detail="manifest.json 社群信息格式不正确")
+        gid = str(group.get("group_id") or "")
+        if not gid.isdigit():
+            raise HTTPException(status_code=400, detail=f"manifest.json 包含非法社群 ID: {gid}")
+        group_ids.append(gid)
+
+    data_entries = [name.rstrip("/") for name in names if name and name != "manifest.json"]
+    root_entries = {name.split("/", 1)[0] for name in data_entries if name}
+    if manifest.get("export_type") == "all_output":
+        if "output" not in root_entries:
+            raise HTTPException(status_code=400, detail="全部导出包缺少 output 根目录")
+    elif manifest.get("export_type") == "single_group":
+        if not group_ids:
+            raise HTTPException(status_code=400, detail="单社群导出包缺少社群信息")
+        expected_root = str(manifest.get("source_root") or "").strip().replace("\\", "/").strip("/")
+        if not expected_root or not _is_safe_zip_path(expected_root):
+            raise HTTPException(status_code=400, detail="单社群导出包 manifest.json 缺少有效目录信息")
+        if not any(entry == expected_root or entry.startswith(expected_root + "/") for entry in data_entries):
+            raise HTTPException(status_code=400, detail="单社群导出包内容与 manifest.json 目录信息不一致")
+    else:
+        raise HTTPException(status_code=400, detail="manifest.json 包含未知导出类型")
+
+    return {
+        "manifest": manifest,
+        "group_ids": group_ids,
+        "zip_entries": names,
+    }
+
+
+def _get_import_conflicts(group_ids: List[str]) -> List[Dict[str, Any]]:
+    output_dir = _get_output_dir()
+    path_manager = get_db_path_manager()
+    conflicts: List[Dict[str, Any]] = []
+    for group_id in group_ids:
+        candidate_paths = [
+            os.path.join(output_dir, group_id),
+            os.path.join(output_dir, "databases", group_id),
+            os.path.join(path_manager.base_dir, group_id),
+        ]
+        existing = []
+        for path in candidate_paths:
+            abs_path = os.path.abspath(path)
+            if abs_path not in existing and os.path.exists(abs_path):
+                existing.append(abs_path)
+        if existing:
+            conflicts.append({"group_id": group_id, "paths": existing})
+    return conflicts
+
+
+def _build_import_preview(archive_bytes: bytes) -> Dict[str, Any]:
+    parsed = _parse_import_archive(archive_bytes)
+    manifest = _enrich_import_manifest_with_archive_counts(archive_bytes, parsed["manifest"])
+    conflicts = _get_import_conflicts(parsed["group_ids"])
+    return {
+        "success": True,
+        "manifest": manifest,
+        "groups": manifest.get("groups", []),
+        "conflicts": conflicts,
+        "can_import": len(conflicts) == 0,
+    }
+
+
+def _extract_import_archive(archive_bytes: bytes) -> Dict[str, Any]:
+    preview = _build_import_preview(archive_bytes)
+    if preview["conflicts"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "导入的社群本地数据已存在，请先删除已有本地数据后再导入",
+                "conflicts": preview["conflicts"],
+            },
+        )
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        for member in zf.infolist():
+            name = member.filename
+            if name == "manifest.json":
+                continue
+            if _is_ignored_export_import_path(name):
+                continue
+            target = _safe_zip_join(project_root, name)
+            if member.is_dir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            if os.path.isdir(target):
+                raise HTTPException(status_code=400, detail=f"导入路径冲突，目标是目录: {name}")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(member) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+    for group in preview["groups"]:
+        try:
+            group_id = int(str(group.get("group_id")))
+            meta = dict(group)
+            meta.pop("cover_image_data_url", None)
+            if meta.get("cover_url") and not meta.get("background_url"):
+                meta["background_url"] = meta.get("cover_url")
+            _persist_group_meta_local(group_id, meta)
+        except Exception:
+            continue
+
+    scan_local_groups()
+    return {
+        "success": True,
+        "message": f"导入成功，共导入 {len(preview['groups'])} 个社群",
+        "manifest": preview["manifest"],
+        "groups": preview["groups"],
+    }
+
+
 # API路由定义
 @app.get("/")
 async def root():
@@ -546,6 +1266,103 @@ async def root():
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "timestamp": datetime.now()}
+
+
+@app.get("/api/groups/{group_id}/export")
+async def export_group_folder(group_id: str):
+    try:
+        if not group_id.isdigit():
+            raise HTTPException(status_code=400, detail="社群 ID 格式不正确")
+
+        path_manager = get_db_path_manager()
+        candidate_dirs = [
+            os.path.join(path_manager.base_dir, group_id),
+            os.path.join(_get_output_dir(), group_id),
+        ]
+        group_dir = next((path for path in candidate_dirs if os.path.isdir(path)), None)
+        if not group_dir:
+            raise HTTPException(status_code=404, detail=f"社群 {group_id} 本地文件夹不存在")
+
+        archive_root = os.path.relpath(group_dir, project_root).replace("\\", "/")
+        if not _is_safe_zip_path(archive_root):
+            archive_root = posixpath.join("output", "databases", group_id)
+        manifest = _build_export_manifest(
+            "single_group",
+            group_dir,
+            archive_root,
+            [{"group_id": group_id, "path": group_dir}],
+        )
+        zip_path = await asyncio.to_thread(_zip_directory_with_manifest, group_dir, archive_root, manifest)
+        filename = f"zsxq_group_{group_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=filename,
+            background=BackgroundTask(lambda: os.path.exists(zip_path) and os.remove(zip_path)),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导出社群文件夹失败: {str(e)}")
+
+
+@app.get("/api/export/all")
+async def export_all_output_folder():
+    try:
+        output_dir = _get_output_dir()
+        if not os.path.isdir(output_dir):
+            raise HTTPException(status_code=404, detail="output 文件夹不存在")
+
+        archive_root = os.path.relpath(output_dir, project_root).replace("\\", "/")
+        if not _is_safe_zip_path(archive_root) or archive_root.startswith(".."):
+            archive_root = "output"
+        groups = _find_group_dirs_under_output(output_dir)
+        manifest = _build_export_manifest("all_output", output_dir, archive_root, groups)
+        zip_path = await asyncio.to_thread(_zip_directory_with_manifest, output_dir, archive_root, manifest)
+        filename = f"zsxq_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=filename,
+            background=BackgroundTask(lambda: os.path.exists(zip_path) and os.remove(zip_path)),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导出全部 output 失败: {str(e)}")
+
+
+@app.post("/api/import/preview")
+async def preview_import_archive(request: Request):
+    try:
+        archive_bytes = await request.body()
+        if not archive_bytes:
+            raise HTTPException(status_code=400, detail="请上传 zip 文件")
+        return await asyncio.to_thread(_build_import_preview, archive_bytes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取导入清单失败: {str(e)}")
+
+
+@app.post("/api/import/confirm")
+async def confirm_import_archive(request: Request):
+    try:
+        active_task_ids = get_active_task_ids()
+        if active_task_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=f"存在正在运行的任务，请先停止后再导入: {', '.join(active_task_ids)}"
+            )
+        archive_bytes = await request.body()
+        if not archive_bytes:
+            raise HTTPException(status_code=400, detail="请上传 zip 文件")
+        return await asyncio.to_thread(_extract_import_archive, archive_bytes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导入数据失败: {str(e)}")
+
 
 @app.get("/api/config")
 async def get_config():
@@ -896,9 +1713,13 @@ async def get_database_stats():
     """获取数据库统计信息"""
     try:
         configured = is_configured()
-        if not configured:
+        path_manager = get_db_path_manager()
+        groups_info = path_manager.list_all_groups()
+        has_local_data = bool(groups_info)
+        if not configured and not has_local_data:
             return {
                 "configured": False,
+                "has_local_data": False,
                 "topic_database": {
                     "stats": {},
                     "timestamp_info": {
@@ -914,13 +1735,12 @@ async def get_database_stats():
             }
 
         # 聚合所有本地群组的数据库统计信息
-        path_manager = get_db_path_manager()
-        groups_info = path_manager.list_all_groups()
 
         if not groups_info:
             # 已配置但尚未产生本地数据
             return {
                 "configured": True,
+                "has_local_data": False,
                 "topic_database": {
                     "stats": {},
                     "timestamp_info": {
@@ -993,7 +1813,8 @@ async def get_database_stats():
         }
 
         return {
-            "configured": True,
+            "configured": configured,
+            "has_local_data": True,
             "topic_database": {
                 "stats": aggregated_topic_stats,
                 "timestamp_info": timestamp_info,
@@ -1931,23 +2752,22 @@ async def download_single_file(group_id: str, file_id: int, background_tasks: Ba
 @app.get("/api/files/status/{group_id}/{file_id}")
 async def get_file_status(group_id: str, file_id: int):
     """获取文件下载状态"""
+    file_db = None
     try:
-        crawler = get_crawler_for_group(group_id)
-        downloader = crawler.get_file_downloader()
+        file_db = _open_local_files_db(group_id)
 
         # 查询文件信息
-        downloader.file_db.cursor.execute('''
+        file_db.cursor.execute('''
             SELECT name, size, download_status
             FROM files
             WHERE file_id = ?
         ''', (file_id,))
 
-        result = downloader.file_db.cursor.fetchone()
+        result = file_db.cursor.fetchone()
 
         if not result:
             # 文件不在数据库中，检查是否有同名文件在下载目录
             import os
-            download_dir = downloader.download_dir
 
             # 尝试从话题详情中获取文件名（这里需要额外的逻辑）
             # 暂时返回文件不存在的状态
@@ -1971,7 +2791,8 @@ async def get_file_status(group_id: str, file_id: int):
         if not safe_filename:
             safe_filename = f"file_{file_id}"
 
-        download_dir = downloader.download_dir
+        path_manager = get_db_path_manager()
+        download_dir = os.path.join(path_manager.get_group_dir(group_id), "downloads")
         file_path = os.path.join(download_dir, safe_filename)
 
         local_exists = os.path.exists(file_path)
@@ -1987,23 +2808,26 @@ async def get_file_status(group_id: str, file_id: int):
             "local_path": file_path if local_exists else None,
             "is_complete": local_exists and local_size == file_size
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取文件状态失败: {str(e)}")
+    finally:
+        if file_db:
+            file_db.close()
 
 @app.get("/api/files/check-local/{group_id}")
 async def check_local_file_status(group_id: str, file_name: str, file_size: int):
     """检查本地文件状态（不依赖数据库）"""
     try:
-        crawler = get_crawler_for_group(group_id)
-        downloader = crawler.get_file_downloader()
-
         # 清理文件名
         import os
         safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}')
         if not safe_filename:
             safe_filename = file_name
 
-        download_dir = downloader.download_dir
+        path_manager = get_db_path_manager()
+        download_dir = os.path.join(path_manager.get_group_dir(group_id), "downloads")
         file_path = os.path.join(download_dir, safe_filename)
 
         local_exists = os.path.exists(file_path)
@@ -2025,22 +2849,21 @@ async def check_local_file_status(group_id: str, file_name: str, file_size: int)
 @app.get("/api/files/stats/{group_id}")
 async def get_file_stats(group_id: str):
     """获取指定群组的文件统计信息"""
-    crawler = None
+    file_db = None
     try:
-        crawler = get_crawler_for_group(group_id)
-        downloader = crawler.get_file_downloader()
+        file_db = _open_local_files_db(group_id)
 
         # 获取文件数据库统计
-        stats = downloader.file_db.get_database_stats()
+        stats = file_db.get_database_stats()
 
         # 获取下载状态统计
         # 首先检查是否有download_status列
-        downloader.file_db.cursor.execute("PRAGMA table_info(files)")
-        columns = [col[1] for col in downloader.file_db.cursor.fetchall()]
+        file_db.cursor.execute("PRAGMA table_info(files)")
+        columns = [col[1] for col in file_db.cursor.fetchall()]
 
         if 'download_status' in columns:
             # 新版本数据库，有download_status列
-            downloader.file_db.cursor.execute("""
+            file_db.cursor.execute("""
                 SELECT
                     COUNT(*) as total_files,
                     COUNT(CASE WHEN download_status = 'completed' THEN 1 END) as downloaded,
@@ -2048,11 +2871,11 @@ async def get_file_stats(group_id: str):
                     COUNT(CASE WHEN download_status = 'failed' THEN 1 END) as failed
                 FROM files
             """)
-            download_stats = downloader.file_db.cursor.fetchone()
+            download_stats = file_db.cursor.fetchone()
         else:
             # 旧版本数据库，没有download_status列，只统计总数
-            downloader.file_db.cursor.execute("SELECT COUNT(*) FROM files")
-            total_files = downloader.file_db.cursor.fetchone()[0]
+            file_db.cursor.execute("SELECT COUNT(*) FROM files")
+            total_files = file_db.cursor.fetchone()[0]
             download_stats = (total_files, 0, 0, 0)  # 总数, 已下载, 待下载, 失败
 
         result = {
@@ -2066,20 +2889,13 @@ async def get_file_stats(group_id: str):
         }
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取文件统计失败: {str(e)}")
     finally:
-        # 确保关闭数据库连接
-        if crawler:
-            try:
-                if hasattr(crawler, 'file_downloader') and crawler.file_downloader:
-                    if hasattr(crawler.file_downloader, 'file_db') and crawler.file_downloader.file_db:
-                        crawler.file_downloader.file_db.close()
-                if hasattr(crawler, 'db') and crawler.db:
-                    crawler.db.close()
-                print(f"🔒 已关闭群组 {group_id} 的数据库连接")
-            except Exception as e:
-                print(f"⚠️ 关闭数据库连接时出错: {e}")
+        if file_db:
+            file_db.close()
 
 @app.post("/api/files/clear/{group_id}")
 async def clear_file_database(group_id: str):
@@ -2275,9 +3091,9 @@ async def get_topics(page: int = 1, per_page: int = 20, search: Optional[str] = 
 @app.get("/api/files/{group_id}")
 async def get_files(group_id: str, page: int = 1, per_page: int = 20, status: Optional[str] = None):
     """获取指定群组的文件列表"""
+    file_db = None
     try:
-        crawler = get_crawler_for_group(group_id)
-        downloader = crawler.get_file_downloader()
+        file_db = _open_local_files_db(group_id)
 
         offset = (page - 1) * per_page
 
@@ -2300,15 +3116,15 @@ async def get_files(group_id: str, page: int = 1, per_page: int = 20, status: Op
             """
             params = (per_page, offset)
 
-        downloader.file_db.cursor.execute(query, params)
-        files = downloader.file_db.cursor.fetchall()
+        file_db.cursor.execute(query, params)
+        files = file_db.cursor.fetchall()
 
         # 获取总数
         if status:
-            downloader.file_db.cursor.execute("SELECT COUNT(*) FROM files WHERE download_status = ?", (status,))
+            file_db.cursor.execute("SELECT COUNT(*) FROM files WHERE download_status = ?", (status,))
         else:
-            downloader.file_db.cursor.execute("SELECT COUNT(*) FROM files")
-        total = downloader.file_db.cursor.fetchone()[0]
+            file_db.cursor.execute("SELECT COUNT(*) FROM files")
+        total = file_db.cursor.fetchone()[0]
 
         return {
             "files": [
@@ -2329,8 +3145,13 @@ async def get_files(group_id: str, page: int = 1, per_page: int = 20, status: Op
                 "pages": (total + per_page - 1) // per_page
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取文件列表失败: {str(e)}")
+    finally:
+        if file_db:
+            file_db.close()
 
 # 群组相关API端点
 @app.post("/api/local-groups/refresh")
@@ -2608,8 +3429,11 @@ async def get_topic_detail(topic_id: int, group_id: str):
       POST /api/topics/fetch-single/{group_id}/{topic_id}。
     """
     try:
-        crawler = get_crawler_for_group(group_id)
-        topic_detail = crawler.db.get_topic_detail(topic_id)
+        db = _open_local_topics_db(group_id)
+        try:
+            topic_detail = db.get_topic_detail(topic_id)
+        finally:
+            db.close()
 
         if not topic_detail:
             # 业务上这是一个“正常”的不存在场景，直接向外抛 404，
@@ -2964,13 +3788,18 @@ async def fetch_single_topic(group_id: str, topic_id: int, fetch_comments: bool 
 async def get_group_tags(group_id: str):
     """获取指定群组的所有标签"""
     try:
-        crawler = get_crawler_for_group(group_id)
-        tags = crawler.db.get_tags_by_group(int(group_id))
+        db = _open_local_topics_db(group_id)
+        try:
+            tags = db.get_tags_by_group(int(group_id))
+        finally:
+            db.close()
         
         return {
             "tags": tags,
             "total": len(tags)
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取标签列表失败: {str(e)}")
 
@@ -2978,19 +3807,21 @@ async def get_group_tags(group_id: str):
 async def get_topics_by_tag(group_id: int, tag_id: int, page: int = 1, per_page: int = 20):
     """根据标签获取指定群组的话题列表"""
     try:
-        # 使用指定群组的爬虫实例
-        crawler = get_crawler_for_group(str(group_id))
-        
-        # 验证标签是否存在于该群组中
-        crawler.db.cursor.execute('SELECT COUNT(*) FROM tags WHERE tag_id = ? AND group_id = ?', (tag_id, group_id))
-        tag_count = crawler.db.cursor.fetchone()[0]
-        
-        if tag_count == 0:
-            raise HTTPException(status_code=404, detail="标签在该群组中不存在")
+        db = _open_local_topics_db(str(group_id))
+        try:
+            db.cursor.execute('SELECT COUNT(*) FROM tags WHERE tag_id = ? AND group_id = ?', (tag_id, group_id))
+            tag_count = db.cursor.fetchone()[0]
             
-        result = crawler.db.get_topics_by_tag(tag_id, page, per_page)
+            if tag_count == 0:
+                raise HTTPException(status_code=404, detail="标签在该群组中不存在")
+
+            result = db.get_topics_by_tag(tag_id, page, per_page)
+        finally:
+            db.close()
         
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"根据标签获取话题失败: {str(e)}")
 
@@ -3168,6 +3999,22 @@ async def update_crawl_settings(settings: dict):
 async def get_group_columns_summary(group_id: str):
     """获取群组专栏摘要信息，检查是否存在专栏内容"""
     try:
+        path_manager = get_db_path_manager()
+        columns_db_path = path_manager.get_columns_db_path(group_id)
+        if os.path.exists(columns_db_path):
+            db = ZSXQColumnsDatabase(columns_db_path)
+            try:
+                stats = db.get_stats(int(group_id))
+                columns = db.get_columns(int(group_id))
+                if stats.get("columns_count", 0) > 0 or stats.get("topics_count", 0) > 0:
+                    return {
+                        "has_columns": True,
+                        "title": columns[0].get("name") if columns else "专栏",
+                        "source": "local",
+                    }
+            finally:
+                db.close()
+
         # 自动匹配该群组所属账号，获取对应Cookie
         cookie = get_cookie_for_group(group_id)
         
@@ -3221,21 +4068,17 @@ async def get_group_columns_summary(group_id: str):
 async def get_group_info(group_id: str):
     """获取群组信息（带本地回退，避免401/500导致前端报错）"""
     try:
-        # 自动匹配该群组所属账号，获取对应Cookie
-        cookie = get_cookie_for_group(group_id)
-
         # 本地回退数据构造（不访问官方API）
         def build_fallback(source: str = "fallback", note: str = None) -> dict:
             files_count = 0
             try:
-                crawler = get_crawler_for_group(group_id)
-                downloader = crawler.get_file_downloader()
+                file_db = _open_local_files_db(group_id)
                 try:
-                    downloader.file_db.cursor.execute("SELECT COUNT(*) FROM files")
-                    row = downloader.file_db.cursor.fetchone()
+                    file_db.cursor.execute("SELECT COUNT(*) FROM files")
+                    row = file_db.cursor.fetchone()
                     files_count = (row[0] or 0) if row else 0
-                except Exception:
-                    files_count = 0
+                finally:
+                    file_db.close()
             except Exception:
                 files_count = 0
 
@@ -3256,6 +4099,9 @@ async def get_group_info(group_id: str):
             if note:
                 result["note"] = note
             return result
+
+        # 自动匹配该群组所属账号，获取对应Cookie
+        cookie = get_cookie_for_group(group_id)
 
         # 若没有可用 Cookie，直接返回本地回退，避免抛 400/500
         if not cookie:
@@ -3299,13 +4145,14 @@ async def get_group_info(group_id: str):
 @app.get("/api/groups/{group_id}/topics")
 async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, search: Optional[str] = None):
     """获取指定群组的话题列表"""
+    db = None
     try:
-        # 使用指定群组的爬虫实例
-        crawler = get_crawler_for_group(str(group_id))
+        db = _open_local_topics_db(str(group_id))
+        cursor = db.cursor
 
         # 🧪 调试：打印当前使用的数据库路径
         try:
-            db_path = getattr(getattr(crawler, "db", None), "db_path", None)
+            db_path = getattr(db, "db_path", None)
             print(f"[DEBUG get_group_topics] group_id={group_id}, db_path={db_path}, page={page}, per_page={per_page}")
         except Exception as e:
             print(f"[DEBUG get_group_topics] failed to print db_path: {e}")
@@ -3352,8 +4199,8 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
             """
             params = (group_id, per_page, offset)
 
-        crawler.db.cursor.execute(query, params)
-        topics = crawler.db.cursor.fetchall()
+        cursor.execute(query, params)
+        topics = cursor.fetchall()
 
         # 🧪 调试：打印前若干条话题的 topic_id 和标题
         try:
@@ -3371,10 +4218,10 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
 
         # 获取总数
         if search:
-            crawler.db.cursor.execute("SELECT COUNT(*) FROM topics WHERE group_id = ? AND title LIKE ?", (group_id, f"%{search}%"))
+            cursor.execute("SELECT COUNT(*) FROM topics WHERE group_id = ? AND title LIKE ?", (group_id, f"%{search}%"))
         else:
-            crawler.db.cursor.execute("SELECT COUNT(*) FROM topics WHERE group_id = ?", (group_id,))
-        total = crawler.db.cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM topics WHERE group_id = ?", (group_id,))
+        total = cursor.fetchone()[0]
 
         # 处理话题数据
         topics_list = []
@@ -3421,8 +4268,13 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
                 "pages": (total + per_page - 1) // per_page
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取群组话题失败: {str(e)}")
+    finally:
+        if db:
+            db.close()
 
 @app.get("/api/groups/{group_id}/stats")
 async def get_group_stats(group_id: int):

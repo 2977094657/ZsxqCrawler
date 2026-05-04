@@ -13,6 +13,7 @@
 
 - **智能采集**: 支持全量、增量、智能更新等多种采集模式
 - **文件管理**: 自动下载和管理知识星球中的文件资源，支持直接下载
+- **导入导出**: 支持单社群或全部数据打包备份、导入预览、冲突检查与离线浏览
 - **命令行界面**: 提供交互式命令行工具
 - **Web 界面**: 现代化的 React 前端界面，操作直观
 
@@ -25,19 +26,19 @@
   <p><em>首页 - 群组选择和概览</em></p>
 </div>
 
-<div align="center">
-  <img src="images/config.png" alt="配置页面" height="400">
-  <p><em>配置页面 - 爬取间隔设置</em></p>
-</div>
-
-<div align="center">
-  <img src="images/log.png" alt="日志页面" height="400">
-  <p><em>日志页面 - 实时任务执行日志</em></p>
-</div>
+| 配置页面 | 日志页面 |
+| --- | --- |
+| <img src="images/config.png" alt="配置页面" height="300"> | <img src="images/log.png" alt="日志页面" height="300"> |
+| <em>配置页面 - 爬取间隔设置</em> | <em>日志页面 - 实时任务执行日志</em> |
 
 <div align="center">
   <img src="images/column.png" alt="专栏文章页面" height="400">
   <p><em>专栏文章页面 - 专栏目录浏览、文章内容展示与视频下载</em></p>
+</div>
+
+<div align="center">
+  <img src="images/import.png" alt="导入数据包页面" height="400">
+  <p><em>导入数据包 - 导出信息预览、社群列表和冲突检查</em></p>
 </div>
 
 ## 快速开始
@@ -98,7 +99,7 @@ NEXT_PUBLIC_API_BASE_URL=http://192.168.x.x:8208
 
 ```bash
 # 运行交互式命令行工具
-uv run zsxq_interactive_crawler.py
+uv run -m backend.zsxq_interactive_crawler
 ```
 
 <div align="center">
@@ -120,6 +121,41 @@ uv run zsxq_interactive_crawler.py
 - **图片缓存（可安全删除）**: `output/databases/{group_id}/images/`  
   - 用于话题图片预览的本地缓存，如被删除，后续访问时会自动重新生成。
 
+
+## 项目结构
+
+```text
+.
+├── backend/                 # FastAPI 后端、爬虫核心、数据库与导出工具
+├── frontend/                # Next.js Web 前端
+├── scripts/                 # 一次性迁移和维护脚本
+├── docs/                    # 迁移说明等补充文档
+├── images/                  # README 和界面展示截图
+├── output/                  # 运行时数据目录（默认忽略提交）
+├── main.py                  # 后端兼容启动入口，实际应用位于 backend.main
+├── pyproject.toml           # Python 项目配置
+└── README.md
+```
+
+后端业务代码已统一收敛到 `backend/` 包中。为了兼容旧启动方式，根目录保留 `main.py`，仍可使用 `uv run main.py` 启动服务。
+
+## 数据导出与导入
+
+Web 首页支持按社群或整体备份本地数据：
+
+- **单社群导出**: 每个社群卡片上的“导出”按钮会将该社群本地文件夹打包为 zip。
+- **全部导出**: 首页顶部“全部导出”按钮会将项目根目录下的 `output` 文件夹整体打包为 zip。
+- **导入**: 首页顶部“导入”按钮选择 zip 后，会先读取压缩包根目录的 `manifest.json` 并弹窗展示导出时间、数据大小和社群列表，确认后再导入。
+- **导入预览统计**: 社群卡片底部依次展示成员数、话题数和文件数；话题/文件数量会优先根据导入包内 SQLite 数据库重新计算，避免旧导出包的 `manifest.json` 统计缺失时显示为 0。
+- **离线浏览**: 导入后的社群数据可在未登录、未配置 Cookie 的情况下进入社群浏览本地话题、标签和文件列表；采集、刷新、下载等联网操作仍需要配置 Cookie。
+- **冲突策略**: 如果导入包中的社群本地文件夹已存在，系统会拒绝导入并提示先删除已有本地数据，不会覆盖现有数据。
+
+导出的 zip 根目录会包含 `manifest.json`，用于记录：
+
+- 导出类型（单社群或全部 `output`）
+- 导出时间
+- 导出数据大小
+- 社群 ID、名称、类型、封面、群主、统计信息等元数据
 
 ## 贡献指南
 
