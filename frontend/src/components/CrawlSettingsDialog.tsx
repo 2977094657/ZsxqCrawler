@@ -38,15 +38,15 @@ export default function CrawlSettingsDialog({
   pagesPerBatch,
   onSettingsChange,
 }: CrawlSettingsDialogProps) {
-  const [localCrawlInterval, setLocalCrawlInterval] = useState(crawlInterval);
-  const [localLongSleepInterval, setLocalLongSleepInterval] = useState(longSleepInterval);
-  const [localPagesPerBatch, setLocalPagesPerBatch] = useState(pagesPerBatch);
+  const [localCrawlInterval, setLocalCrawlInterval] = useState<number | ''>(crawlInterval);
+  const [localLongSleepInterval, setLocalLongSleepInterval] = useState<number | ''>(longSleepInterval);
+  const [localPagesPerBatch, setLocalPagesPerBatch] = useState<number | ''>(pagesPerBatch);
 
   // 新增范围设置状态
-  const [crawlIntervalMin, setCrawlIntervalMin] = useState(2);
-  const [crawlIntervalMax, setCrawlIntervalMax] = useState(5);
-  const [longSleepIntervalMin, setLongSleepIntervalMin] = useState(180);
-  const [longSleepIntervalMax, setLongSleepIntervalMax] = useState(300);
+  const [crawlIntervalMin, setCrawlIntervalMin] = useState<number | ''>(2);
+  const [crawlIntervalMax, setCrawlIntervalMax] = useState<number | ''>(5);
+  const [longSleepIntervalMin, setLongSleepIntervalMin] = useState<number | ''>(180);
+  const [longSleepIntervalMax, setLongSleepIntervalMax] = useState<number | ''>(300);
   const [useRandomInterval, setUseRandomInterval] = useState(true);
   const [selectedPreset, setSelectedPreset] = useState<'fast' | 'standard' | 'safe' | null>('standard');
 
@@ -226,7 +226,7 @@ export default function CrawlSettingsDialog({
             <p className="text-xs text-gray-500">
               {useRandomInterval
                 ? '每次爬取页面后的随机等待时间范围'
-                : `每次爬取页面后的固定等待时间 (取中间值: ${Math.round((crawlIntervalMin + crawlIntervalMax) / 2)}秒)`
+                : `每次爬取页面后的固定等待时间 (取中间值: ${Math.round(((crawlIntervalMin || 0) + (crawlIntervalMax || 0)) / 2)}秒)`
               }
             </p>
           </div>
@@ -288,7 +288,7 @@ export default function CrawlSettingsDialog({
             <p className="text-xs text-gray-500">
               {useRandomInterval
                 ? '达到批次大小后的随机长时间休眠范围'
-                : `达到批次大小后的固定长时间休眠 (取中间值: ${Math.round((longSleepIntervalMin + longSleepIntervalMax) / 2)}秒)`
+                : `达到批次大小后的固定长时间休眠 (取中间值: ${Math.round(((longSleepIntervalMin || 0) + (longSleepIntervalMax || 0)) / 2)}秒)`
               }
             </p>
           </div>

@@ -38,15 +38,15 @@ export default function DownloadSettingsDialog({
   filesPerBatch,
   onSettingsChange,
 }: DownloadSettingsDialogProps) {
-  const [localDownloadInterval, setLocalDownloadInterval] = useState(downloadInterval);
-  const [localLongSleepInterval, setLocalLongSleepInterval] = useState(longSleepInterval);
-  const [localFilesPerBatch, setLocalFilesPerBatch] = useState(filesPerBatch);
+  const [localDownloadInterval, setLocalDownloadInterval] = useState<number | ''>(downloadInterval);
+  const [localLongSleepInterval, setLocalLongSleepInterval] = useState<number | ''>(longSleepInterval);
+  const [localFilesPerBatch, setLocalFilesPerBatch] = useState<number | ''>(filesPerBatch);
 
   // 新增范围设置状态
-  const [downloadIntervalMin, setDownloadIntervalMin] = useState(15);
-  const [downloadIntervalMax, setDownloadIntervalMax] = useState(30);
-  const [longSleepIntervalMin, setLongSleepIntervalMin] = useState(30);
-  const [longSleepIntervalMax, setLongSleepIntervalMax] = useState(60);
+  const [downloadIntervalMin, setDownloadIntervalMin] = useState<number | ''>(15);
+  const [downloadIntervalMax, setDownloadIntervalMax] = useState<number | ''>(30);
+  const [longSleepIntervalMin, setLongSleepIntervalMin] = useState<number | ''>(30);
+  const [longSleepIntervalMax, setLongSleepIntervalMax] = useState<number | ''>(60);
   const [useRandomInterval, setUseRandomInterval] = useState(true);
   const [selectedPreset, setSelectedPreset] = useState<'fast' | 'standard' | 'safe' | null>('fast');
 
@@ -217,7 +217,7 @@ export default function DownloadSettingsDialog({
             <p className="text-xs text-gray-500">
               {useRandomInterval
                 ? '每次下载文件后的随机等待时间范围'
-                : `每次下载文件后的固定等待时间 (取中间值: ${Math.round((downloadIntervalMin + downloadIntervalMax) / 2)}秒)`
+                : `每次下载文件后的固定等待时间 (取中间值: ${Math.round(((downloadIntervalMin || 0) + (downloadIntervalMax || 0)) / 2)}秒)`
               }
             </p>
           </div>
@@ -279,7 +279,7 @@ export default function DownloadSettingsDialog({
             <p className="text-xs text-gray-500">
               {useRandomInterval
                 ? '达到批次大小后的随机长时间休眠范围'
-                : `达到批次大小后的固定长时间休眠 (取中间值: ${Math.round((longSleepIntervalMin + longSleepIntervalMax) / 2)}秒)`
+                : `达到批次大小后的固定长时间休眠 (取中间值: ${Math.round(((longSleepIntervalMin || 0) + (longSleepIntervalMax || 0)) / 2)}秒)`
               }
             </p>
           </div>

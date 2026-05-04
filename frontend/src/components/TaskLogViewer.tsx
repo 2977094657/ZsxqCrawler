@@ -378,7 +378,7 @@ export default function TaskLogViewer({
           <div className="flex items-center gap-2">
             <Terminal className="h-4 w-4" />
             <CardTitle className="text-sm font-mono">
-              任务日志 - {taskId.slice(0, 8)}
+              任务日志 - {taskId?.slice(0, 8) || '未知任务'}
             </CardTitle>
           </div>
           <div className="flex items-center gap-2">
