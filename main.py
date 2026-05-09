@@ -8,17 +8,20 @@ import sys
 import uvicorn
 
 from backend.main import app
+from backend.logger_config import ensure_configured, log_info
 
 
 def main() -> None:
     """启动 FastAPI 后端服务。"""
+    ensure_configured()
     port = 8208
     if len(sys.argv) > 2 and sys.argv[1] == "--port":
         try:
             port = int(sys.argv[2])
         except ValueError:
             port = 8208
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    log_info(f"启动后端服务: host=0.0.0.0, port={port}")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_config=None, access_log=True)
 
 
 if __name__ == "__main__":

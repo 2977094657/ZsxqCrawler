@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, List
 from .zsxq_database import ZSXQDatabase
 from .zsxq_file_downloader import ZSXQFileDownloader
 from .db_path_manager import get_db_path_manager
+from .logger_config import log_error, log_info, log_warning
 import os
 import argparse
 try:
@@ -20,8 +21,8 @@ except ImportError:
     try:
         import tomli as tomllib
     except ImportError:
-        print("⚠️ 需要安装tomli库来解析TOML配置文件")
-        print("💡 请运行: pip install tomli")
+        log_warning("⚠️ 需要安装tomli库来解析TOML配置文件")
+        log_warning("💡 请运行: pip install tomli")
         tomllib = None
 
 
@@ -102,9 +103,11 @@ class ZSXQInteractiveCrawler:
 
     def log(self, message: str):
         """统一的日志输出方法"""
-        print(message)  # 仍然输出到控制台
+        message = str(message)
         if self.log_callback:
             self.log_callback(message)  # 同时推送到前端
+        else:
+            log_info(message)
 
     def set_stop_flag(self):
         """设置停止标志"""
@@ -174,7 +177,7 @@ class ZSXQInteractiveCrawler:
             
             return cookie
         except Exception as e:
-            print(f"Cookie清理失败: {e}")
+            self.log(f"Cookie清理失败: {e}")
             return cookie  # 返回原始值
     
     def get_file_downloader(self):
@@ -193,16 +196,16 @@ class ZSXQInteractiveCrawler:
         total_users = stats.get('users', 0)
         total_comments = stats.get('comments', 0)
         
-        print(f"\n📊 当前数据库状态:")
-        print(f"   话题: {total_topics}, 用户: {total_users}, 评论: {total_comments}")
+        self.log(f"\n📊 当前数据库状态:")
+        self.log(f"   话题: {total_topics}, 用户: {total_users}, 评论: {total_comments}")
         
         # 显示时间戳范围信息
         if total_topics > 0:
             timestamp_info = self.db.get_timestamp_range_info()
             if timestamp_info['has_data']:
-                print(f"   时间范围: {timestamp_info['oldest_timestamp']} ~ {timestamp_info['newest_timestamp']}")
+                self.log(f"   时间范围: {timestamp_info['oldest_timestamp']} ~ {timestamp_info['newest_timestamp']}")
             else:
-                print(f"   ⚠️ 时间戳数据不完整")
+                self.log(f"   ⚠️ 时间戳数据不完整")
     
     def get_stealth_headers(self) -> Dict[str, str]:
         """获取隐蔽性更强的请求头"""
@@ -319,7 +322,7 @@ class ZSXQInteractiveCrawler:
             # 调试信息
             if self.debug_mode:
                 actual_duration = (actual_end_time - start_time).total_seconds()
-                print(f"   💤 长休眠完成: 预计{long_delay:.1f}秒，实际{actual_duration:.1f}秒 (页面#{self.page_count})")
+                self.log(f"   💤 长休眠完成: 预计{long_delay:.1f}秒，实际{actual_duration:.1f}秒 (页面#{self.page_count})")
 
     def fetch_comments_safe(self, topic_id: int, begin_time: str = None, count: int = 30, max_retries: int = 10) -> Optional[Dict[str, Any]]:
         """安全获取话题评论，包含重试机制处理反爬"""
@@ -343,14 +346,14 @@ class ZSXQInteractiveCrawler:
                 if self.debug_mode and retry == 0:  # 只在第一次尝试时输出
                     from urllib.parse import urlencode
                     full_url = f"{url}?{urlencode(params)}"
-                    print(f"🔍 评论API调试信息:")
-                    print(f"   🔗 完整URL: {full_url}")
-                    print(f"   📊 参数: {params}")
-                    print(f"   🔧 关键认证头:")
-                    print(f"      X-Signature: {headers.get('X-Signature', 'N/A')}")
-                    print(f"      X-Timestamp: {headers.get('X-Timestamp', 'N/A')}")
-                    print(f"      X-Request-Id: {headers.get('X-Request-Id', 'N/A')}")
-                    print(f"      X-Aduid: {headers.get('X-Aduid', 'N/A')}")
+                    self.log(f"🔍 评论API调试信息:")
+                    self.log(f"   🔗 完整URL: {full_url}")
+                    self.log(f"   📊 参数: {params}")
+                    self.log(f"   🔧 关键认证头:")
+                    self.log(f"      X-Signature: {headers.get('X-Signature', 'N/A')}")
+                    self.log(f"      X-Timestamp: {headers.get('X-Timestamp', 'N/A')}")
+                    self.log(f"      X-Request-Id: {headers.get('X-Request-Id', 'N/A')}")
+                    self.log(f"      X-Aduid: {headers.get('X-Aduid', 'N/A')}")
 
                 # 发送请求
                 response = self.session.get(url, params=params, headers=headers, timeout=30)
@@ -548,12 +551,12 @@ class ZSXQInteractiveCrawler:
         
         # 调试模式输出详细信息
         if self.debug_mode:
-            print(f"   🔍 调试模式:")
-            print(f"   📍 基础URL: {url}")
-            print(f"   📊 所有参数: {params}")
-            print(f"   🔧 请求头: {json.dumps(headers, ensure_ascii=False, indent=4)}")
-            print(f"   🍪 Cookie长度: {len(self.cookie)}字符")
-            print(f"   ⏰ 当前时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.log(f"   🔍 调试模式:")
+            self.log(f"   📍 基础URL: {url}")
+            self.log(f"   📊 所有参数: {params}")
+            self.log(f"   🔧 请求头: {json.dumps(headers, ensure_ascii=False, indent=4)}")
+            self.log(f"   🍪 Cookie长度: {len(self.cookie)}字符")
+            self.log(f"   ⏰ 当前时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # 在发起请求前检查停止标志
         if self.is_stopped():
@@ -593,45 +596,45 @@ class ZSXQInteractiveCrawler:
 
                         # 检查是否是会员过期错误
                         if error_code == 14210:
-                            print(f"   ❌ 会员已过期: {error_message}")
-                            print(f"   📋 完整响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
+                            self.log(f"   ❌ 会员已过期: {error_message}")
+                            self.log(f"   📋 完整响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
                             # 设置过期标志，让调用方知道这是过期错误
                             return {"expired": True, "code": error_code, "message": error_message}
                         else:
-                            print(f"   ❌ API失败: {error_message}")
-                            print(f"   📋 完整响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
+                            self.log(f"   ❌ API失败: {error_message}")
+                            self.log(f"   📋 完整响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
                             return None
                 except json.JSONDecodeError as e:
-                    print(f"   ❌ JSON解析失败: {e}")
-                    print(f"   📄 响应内容: {response.text[:500]}...")
-                    print(f"   📋 响应头: {dict(response.headers)}")
+                    self.log(f"   ❌ JSON解析失败: {e}")
+                    self.log(f"   📄 响应内容: {response.text[:500]}...")
+                    self.log(f"   📋 响应头: {dict(response.headers)}")
                     return None
             else:
-                print(f"   ❌ HTTP错误: {response.status_code}")
-                print(f"   📄 响应内容: {response.text}")
-                print(f"   📋 响应头: {dict(response.headers)}")
+                self.log(f"   ❌ HTTP错误: {response.status_code}")
+                self.log(f"   📄 响应内容: {response.text}")
+                self.log(f"   📋 响应头: {dict(response.headers)}")
                 if response.status_code == 429:
-                    print("   🚨 触发频率限制，建议增加延迟时间")
+                    self.log("   🚨 触发频率限制，建议增加延迟时间")
                 elif response.status_code == 403:
-                    print("   🚨 访问被拒绝，可能需要更新Cookie或反检测策略")
+                    self.log("   🚨 访问被拒绝，可能需要更新Cookie或反检测策略")
                 elif response.status_code == 401:
-                    print("   🚨 认证失败，请检查Cookie是否过期")
+                    self.log("   🚨 认证失败，请检查Cookie是否过期")
                 return None
                 
         except requests.exceptions.Timeout as e:
-            print(f"   ❌ 请求超时: {e}")
-            print(f"   🔧 建议: 增加超时时间或检查网络连接")
+            self.log(f"   ❌ 请求超时: {e}")
+            self.log(f"   🔧 建议: 增加超时时间或检查网络连接")
             return None
         except requests.exceptions.ConnectionError as e:
-            print(f"   ❌ 连接错误: {e}")
-            print(f"   🔧 建议: 检查网络连接或DNS设置")
+            self.log(f"   ❌ 连接错误: {e}")
+            self.log(f"   🔧 建议: 检查网络连接或DNS设置")
             return None
         except requests.exceptions.HTTPError as e:
-            print(f"   ❌ HTTP协议错误: {e}")
+            self.log(f"   ❌ HTTP协议错误: {e}")
             return None
         except requests.exceptions.RequestException as e:
-            print(f"   ❌ 请求异常: {e}")
-            print(f"   🔧 异常类型: {type(e).__name__}")
+            self.log(f"   ❌ 请求异常: {e}")
+            self.log(f"   🔧 异常类型: {type(e).__name__}")
             return None
     
     def store_batch_data(self, data: Dict[str, Any]) -> Dict[str, int]:
@@ -688,7 +691,7 @@ class ZSXQInteractiveCrawler:
 
             except Exception as e:
                 stats['errors'] += 1
-                print(f"   ⚠️ 话题导入失败: {e}")
+                self.log(f"   ⚠️ 话题导入失败: {e}")
         
         # 提交事务
         self.db.conn.commit()
@@ -696,7 +699,7 @@ class ZSXQInteractiveCrawler:
     
     def crawl_latest(self, count: int = 20) -> Dict[str, int]:
         """爬取最新话题"""
-        print(f"\n🆕 爬取最新 {count} 个话题...")
+        self.log(f"\n🆕 爬取最新 {count} 个话题...")
         
         data = self.fetch_topics_safe(scope="all", count=count)
         if data:
@@ -704,12 +707,12 @@ class ZSXQInteractiveCrawler:
             self.log(f"💾 存储结果: 新增{stats['new_topics']}, 更新{stats['updated_topics']}")
             return stats
         else:
-            print("❌ 获取失败")
+            self.log("❌ 获取失败")
             return {'new_topics': 0, 'updated_topics': 0, 'errors': 1}
     
     def crawl_historical(self, pages: int = 10, per_page: int = 20) -> Dict[str, int]:
         """爬取历史数据"""
-        print(f"\n📚 爬取历史数据: {pages}页 x {per_page}条/页")
+        self.log(f"\n📚 爬取历史数据: {pages}页 x {per_page}条/页")
         
         total_stats = {'new_topics': 0, 'updated_topics': 0, 'errors': 0, 'pages': 0}
         end_time = None
@@ -746,7 +749,7 @@ class ZSXQInteractiveCrawler:
                     # 成功获取数据
                     topics = data.get('resp_data', {}).get('topics', [])
                     if not topics:
-                        print(f"   📭 无更多数据，停止爬取")
+                        self.log(f"   📭 无更多数据，停止爬取")
                         return total_stats
                     
                     # 存储数据
@@ -777,16 +780,16 @@ class ZSXQInteractiveCrawler:
                             dt = datetime.fromisoformat(original_time.replace('+0800', '+08:00'))
                             dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                            print(f"   📅 原始时间戳: {original_time}")
-                            print(f"   ⏭️ 下一页时间戳: {end_time} (减去{self.timestamp_offset_ms}毫秒)")
+                            self.log(f"   📅 原始时间戳: {original_time}")
+                            self.log(f"   ⏭️ 下一页时间戳: {end_time} (减去{self.timestamp_offset_ms}毫秒)")
                         except Exception as e:
                             end_time = original_time
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
-                            print(f"   ⏭️ 下一页时间戳: {end_time} (未调整)")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⏭️ 下一页时间戳: {end_time} (未调整)")
                     
                     # 检查是否已爬完
                     if len(topics) < per_page:
-                        print(f"   📭 已爬取完毕 (返回{len(topics)}条)")
+                        self.log(f"   📭 已爬取完毕 (返回{len(topics)}条)")
                         return total_stats
                     
                     # 成功，跳出重试循环
@@ -796,7 +799,7 @@ class ZSXQInteractiveCrawler:
                     # 失败，增加重试计数和错误计数
                     retry_count += 1
                     total_stats['errors'] += 1
-                    print(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
+                    self.log(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
                     
                     # 调整时间戳用于重试
                     if end_time:
@@ -805,13 +808,13 @@ class ZSXQInteractiveCrawler:
                             dt = datetime.fromisoformat(end_time.replace('+0800', '+08:00'))
                             dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                            print(f"   🔄 调整时间戳: {end_time} (再次减去{self.timestamp_offset_ms}毫秒)")
+                            self.log(f"   🔄 调整时间戳: {end_time} (再次减去{self.timestamp_offset_ms}毫秒)")
                         except Exception as e:
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
             
             # 如果重试次数用完仍然失败
             if retry_count >= max_retries_per_page:
-                print(f"   🚫 页面 {current_page} 达到最大重试次数，跳过此页")
+                self.log(f"   🚫 页面 {current_page} 达到最大重试次数，跳过此页")
                 # 如果有时间戳，尝试大幅度调整跳过问题区域
                 if end_time:
                     try:
@@ -820,17 +823,17 @@ class ZSXQInteractiveCrawler:
                         # 大幅度跳过，减去1小时
                         dt = dt - timedelta(hours=1)
                         end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                        print(f"   ⏰ 大幅度跳过时间段: {end_time} (减去1小时)")
+                        self.log(f"   ⏰ 大幅度跳过时间段: {end_time} (减去1小时)")
                     except Exception as e:
-                        print(f"   ⚠️ 大幅度时间戳调整失败: {e}")
+                        self.log(f"   ⚠️ 大幅度时间戳调整失败: {e}")
                 completed_pages += 1  # 跳过这一页
         
-        print(f"\n🏁 历史爬取完成:")
-        print(f"   📄 成功页数: {total_stats['pages']}")
-        print(f"   ✅ 新增话题: {total_stats['new_topics']}")
-        print(f"   🔄 更新话题: {total_stats['updated_topics']}")
+        self.log(f"\n🏁 历史爬取完成:")
+        self.log(f"   📄 成功页数: {total_stats['pages']}")
+        self.log(f"   ✅ 新增话题: {total_stats['new_topics']}")
+        self.log(f"   🔄 更新话题: {total_stats['updated_topics']}")
         if total_stats['errors'] > 0:
-            print(f"   ❌ 总错误数: {total_stats['errors']}")
+            self.log(f"   ❌ 总错误数: {total_stats['errors']}")
         
         return total_stats
     
@@ -859,9 +862,9 @@ class ZSXQInteractiveCrawler:
                 dt = datetime.fromisoformat(oldest_timestamp.replace('+0800', '+08:00'))
                 dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
                 start_end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                print(f"🚀 增量爬取起始时间戳: {start_end_time}")
+                self.log(f"🚀 增量爬取起始时间戳: {start_end_time}")
             except Exception as e:
-                print(f"⚠️ 时间戳处理失败，使用原时间戳: {e}")
+                self.log(f"⚠️ 时间戳处理失败，使用原时间戳: {e}")
                 start_end_time = oldest_timestamp
         else:
             self.log(f"📊 数据库为空，将从最新数据开始爬取")
@@ -912,7 +915,7 @@ class ZSXQInteractiveCrawler:
 
                 # 检查是否是会员过期错误
                 if data and data.get('expired'):
-                    print(f"   ❌ 会员已过期，停止爬取")
+                    self.log(f"   ❌ 会员已过期，停止爬取")
                     return data  # 直接返回过期信息
 
                 if data:
@@ -921,25 +924,25 @@ class ZSXQInteractiveCrawler:
                     
                     if not topics:
                         consecutive_empty_pages += 1
-                        print(f"   📭 第{consecutive_empty_pages}个空页面")
+                        self.log(f"   📭 第{consecutive_empty_pages}个空页面")
                         
                         if consecutive_empty_pages >= max_consecutive_empty:
-                            print(f"   🏁 连续{max_consecutive_empty}个空页面，所有历史数据爬取完成")
-                            print(f"\n🎉 无限爬取完成总结:")
-                            print(f"   📄 总页数: {total_stats['pages']}")
-                            print(f"   ✅ 新增话题: {total_stats['new_topics']}")
-                            print(f"   🔄 更新话题: {total_stats['updated_topics']}")
+                            self.log(f"   🏁 连续{max_consecutive_empty}个空页面，所有历史数据爬取完成")
+                            self.log(f"\n🎉 无限爬取完成总结:")
+                            self.log(f"   📄 总页数: {total_stats['pages']}")
+                            self.log(f"   ✅ 新增话题: {total_stats['new_topics']}")
+                            self.log(f"   🔄 更新话题: {total_stats['updated_topics']}")
                             if total_stats['errors'] > 0:
-                                print(f"   ❌ 总错误数: {total_stats['errors']}")
+                                self.log(f"   ❌ 总错误数: {total_stats['errors']}")
                             
                             # 显示最终数据库状态
                             final_db_stats = self.db.get_timestamp_range_info()
                             if final_db_stats['has_data']:
-                                print(f"\n📊 最终数据库状态:")
-                                print(f"   话题总数: {final_db_stats['total_topics']}")
+                                self.log(f"\n📊 最终数据库状态:")
+                                self.log(f"   话题总数: {final_db_stats['total_topics']}")
                                 if timestamp_info['has_data']:
-                                    print(f"   新增话题: {final_db_stats['total_topics'] - timestamp_info['total_topics']}")
-                                print(f"   时间范围: {final_db_stats['oldest_timestamp']} ~ {final_db_stats['newest_timestamp']}")
+                                    self.log(f"   新增话题: {final_db_stats['total_topics'] - timestamp_info['total_topics']}")
+                                self.log(f"   时间范围: {final_db_stats['oldest_timestamp']} ~ {final_db_stats['newest_timestamp']}")
                             
                             return total_stats
                         
@@ -959,7 +962,7 @@ class ZSXQInteractiveCrawler:
                     
                     # 存储数据
                     page_stats = self.store_batch_data(data)
-                    print(f"   💾 页面存储: 新增{page_stats['new_topics']}, 更新{page_stats['updated_topics']}")
+                    self.log(f"   💾 页面存储: 新增{page_stats['new_topics']}, 更新{page_stats['updated_topics']}")
                     
                     # 累计统计
                     total_stats['new_topics'] += page_stats['new_topics']
@@ -968,14 +971,14 @@ class ZSXQInteractiveCrawler:
                     total_stats['pages'] += 1
                     
                     # 显示进度信息
-                    print(f"   📊 获取到 {len(topics)} 个话题，其中 {new_topics_count} 个为新话题")
-                    print(f"   📈 累计: 新增{total_stats['new_topics']}, 更新{total_stats['updated_topics']}, 页数{total_stats['pages']}")
+                    self.log(f"   📊 获取到 {len(topics)} 个话题，其中 {new_topics_count} 个为新话题")
+                    self.log(f"   📈 累计: 新增{total_stats['new_topics']}, 更新{total_stats['updated_topics']}, 页数{total_stats['pages']}")
                     
                     # 调试：显示时间戳信息（简化版）
                     if topics:
                         first_time = topics[0].get('create_time', 'N/A')
                         last_time = topics[-1].get('create_time', 'N/A')
-                        print(f"   ⏰ 时间范围: {first_time} ~ {last_time}")
+                        self.log(f"   ⏰ 时间范围: {first_time} ~ {last_time}")
                     
                     # 准备下一页的时间戳
                     if topics:
@@ -987,15 +990,15 @@ class ZSXQInteractiveCrawler:
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
                         except Exception as e:
                             end_time = original_time
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
                     
                     # 检查是否返回数据量小于预期（可能接近底部）
                     if len(topics) < per_page:
-                        print(f"   ⚠️ 返回数据量({len(topics)})小于预期({per_page})，可能接近历史底部")
+                        self.log(f"   ⚠️ 返回数据量({len(topics)})小于预期({per_page})，可能接近历史底部")
                     
                     # 如果没有新话题且数据量不足，可能已达历史底部
                     if new_topics_count == 0 and len(topics) < per_page:
-                        print(f"   📭 无新话题且数据量不足，可能已达历史底部")
+                        self.log(f"   📭 无新话题且数据量不足，可能已达历史底部")
                         return total_stats
                     
                     # 成功，跳出重试循环
@@ -1005,7 +1008,7 @@ class ZSXQInteractiveCrawler:
                     # 失败，增加重试计数和错误计数
                     retry_count += 1
                     total_stats['errors'] += 1
-                    print(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
+                    self.log(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
                     
                     # 调整时间戳用于重试
                     if end_time:
@@ -1015,11 +1018,11 @@ class ZSXQInteractiveCrawler:
                             dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
                         except Exception as e:
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
             
             # 如果重试次数用完仍然失败
             if not page_success:
-                print(f"   🚫 页面 {current_page} 达到最大重试次数")
+                self.log(f"   🚫 页面 {current_page} 达到最大重试次数")
                 # 大幅度跳过问题区域
                 if end_time:
                     try:
@@ -1027,9 +1030,9 @@ class ZSXQInteractiveCrawler:
                         dt = datetime.fromisoformat(end_time.replace('+0800', '+08:00'))
                         dt = dt - timedelta(hours=1)
                         end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                        print(f"   ⏰ 大幅度跳过时间段: {end_time} (减去1小时)")
+                        self.log(f"   ⏰ 大幅度跳过时间段: {end_time} (减去1小时)")
                     except Exception as e:
-                        print(f"   ⚠️ 大幅度时间戳调整失败: {e}")
+                        self.log(f"   ⚠️ 大幅度时间戳调整失败: {e}")
                 completed_pages += 1  # 跳过这一页
             else:
                 # 页面成功处理后进行长休眠检查（基于页面数而非请求数）
@@ -1037,40 +1040,40 @@ class ZSXQInteractiveCrawler:
             
             # 每50页显示一次总体进度
             if current_page % 50 == 0:
-                print(f"\n🎯 进度报告 (第{current_page}页):")
-                print(f"   📊 累计新增: {total_stats['new_topics']}")
-                print(f"   📊 累计更新: {total_stats['updated_topics']}")
-                print(f"   📊 成功页数: {total_stats['pages']}")
-                print(f"   📊 错误次数: {total_stats['errors']}")
+                self.log(f"\n🎯 进度报告 (第{current_page}页):")
+                self.log(f"   📊 累计新增: {total_stats['new_topics']}")
+                self.log(f"   📊 累计更新: {total_stats['updated_topics']}")
+                self.log(f"   📊 成功页数: {total_stats['pages']}")
+                self.log(f"   📊 错误次数: {total_stats['errors']}")
                 
                 # 显示当前数据库状态
                 current_db_stats = self.db.get_timestamp_range_info()
                 if current_db_stats['has_data']:
-                    print(f"   📊 数据库状态: {current_db_stats['total_topics']}个话题")
-                    print(f"   📊 时间范围: {current_db_stats['oldest_timestamp']} ~ {current_db_stats['newest_timestamp']}")
+                    self.log(f"   📊 数据库状态: {current_db_stats['total_topics']}个话题")
+                    self.log(f"   📊 时间范围: {current_db_stats['oldest_timestamp']} ~ {current_db_stats['newest_timestamp']}")
         
         # 这里理论上不会到达，因为在循环内会return
         return total_stats
     
     def crawl_incremental(self, pages: int = 10, per_page: int = 20) -> Dict[str, int]:
         """增量爬取：基于数据库最老时间戳继续向历史爬取"""
-        print(f"\n📈 增量爬取模式: {pages}页 x {per_page}条/页")
+        self.log(f"\n📈 增量爬取模式: {pages}页 x {per_page}条/页")
         
         # 获取数据库时间戳范围信息
         timestamp_info = self.db.get_timestamp_range_info()
         
         if not timestamp_info['has_data']:
-            print("❌ 数据库中没有话题数据，请先进行历史爬取")
+            self.log("❌ 数据库中没有话题数据，请先进行历史爬取")
             return {'new_topics': 0, 'updated_topics': 0, 'errors': 1}
         
         oldest_timestamp = timestamp_info['oldest_timestamp']
         total_existing = timestamp_info['total_topics']
         
-        print(f"📊 数据库状态:")
-        print(f"   现有话题数: {total_existing}")
-        print(f"   最老时间戳: {oldest_timestamp}")
-        print(f"   最新时间戳: {timestamp_info['newest_timestamp']}")
-        print(f"🎯 将从最老时间戳开始继续向历史爬取...")
+        self.log(f"📊 数据库状态:")
+        self.log(f"   现有话题数: {total_existing}")
+        self.log(f"   最老时间戳: {oldest_timestamp}")
+        self.log(f"   最新时间戳: {timestamp_info['newest_timestamp']}")
+        self.log(f"🎯 将从最老时间戳开始继续向历史爬取...")
         
         # 准备增量爬取的起始时间戳（在最老时间戳基础上减去偏移量）
         try:
@@ -1078,9 +1081,9 @@ class ZSXQInteractiveCrawler:
             dt = datetime.fromisoformat(oldest_timestamp.replace('+0800', '+08:00'))
             dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
             start_end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-            print(f"🚀 增量爬取起始时间戳: {start_end_time}")
+            self.log(f"🚀 增量爬取起始时间戳: {start_end_time}")
         except Exception as e:
-            print(f"⚠️ 时间戳处理失败，使用原时间戳: {e}")
+            self.log(f"⚠️ 时间戳处理失败，使用原时间戳: {e}")
             start_end_time = oldest_timestamp
         
         # 执行增量爬取
@@ -1097,7 +1100,7 @@ class ZSXQInteractiveCrawler:
             # 重试当前页直到成功或达到最大重试次数
             while retry_count < max_retries_per_page:
                 if retry_count > 0:
-                    print(f"   🔄 第{retry_count}次重试")
+                    self.log(f"   🔄 第{retry_count}次重试")
                 
                 # 获取数据 - 总是使用 end_time 参数
                 data = self.fetch_topics_safe(scope="all", count=per_page,
@@ -1105,14 +1108,14 @@ class ZSXQInteractiveCrawler:
 
                 # 检查是否是会员过期错误
                 if data and data.get('expired'):
-                    print(f"   ❌ 会员已过期，停止爬取")
+                    self.log(f"   ❌ 会员已过期，停止爬取")
                     return data  # 直接返回过期信息
 
                 if data:
                     # 成功获取数据
                     topics = data.get('resp_data', {}).get('topics', [])
                     if not topics:
-                        print(f"   📭 无更多历史数据，增量爬取完成")
+                        self.log(f"   📭 无更多历史数据，增量爬取完成")
                         return total_stats
                     
                     # 检查是否有新数据（避免重复爬取已有数据）
@@ -1123,16 +1126,16 @@ class ZSXQInteractiveCrawler:
                         if not self.db.cursor.fetchone():
                             new_topics_count += 1
                     
-                    print(f"   📊 获取到 {len(topics)} 个话题，其中 {new_topics_count} 个为新话题")
+                    self.log(f"   📊 获取到 {len(topics)} 个话题，其中 {new_topics_count} 个为新话题")
                     
                     # 如果没有新话题且当前页话题数少于预期，可能已到达历史底部
                     if new_topics_count == 0 and len(topics) < per_page:
-                        print(f"   📭 无新话题且数据量不足，可能已达历史底部")
+                        self.log(f"   📭 无新话题且数据量不足，可能已达历史底部")
                         return total_stats
                     
                     # 存储数据
                     page_stats = self.store_batch_data(data)
-                    print(f"   💾 页面存储: 新增{page_stats['new_topics']}, 更新{page_stats['updated_topics']}")
+                    self.log(f"   💾 页面存储: 新增{page_stats['new_topics']}, 更新{page_stats['updated_topics']}")
                     
                     # 累计统计
                     total_stats['new_topics'] += page_stats['new_topics']
@@ -1143,12 +1146,12 @@ class ZSXQInteractiveCrawler:
                     
                     # 调试：显示话题时间戳信息
                     if self.debug_mode:
-                        print(f"   🔍 调试信息:")
-                        print(f"   📊 本页获取到 {len(topics)} 个话题")
+                        self.log(f"   🔍 调试信息:")
+                        self.log(f"   📊 本页获取到 {len(topics)} 个话题")
                         for i, topic in enumerate(topics):
                             topic_time = topic.get('create_time', 'N/A')
                             topic_title = topic.get('title', '无标题')[:30]
-                            print(f"   {i+1:2d}. {topic_time} - {topic_title}")
+                            self.log(f"   {i+1:2d}. {topic_time} - {topic_title}")
                     
                     # 准备下一页的时间戳
                     if topics:
@@ -1157,10 +1160,10 @@ class ZSXQInteractiveCrawler:
                             dt = datetime.fromisoformat(original_time.replace('+0800', '+08:00'))
                             dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                            print(f"   ⏭️ 下一页时间戳: {end_time}")
+                            self.log(f"   ⏭️ 下一页时间戳: {end_time}")
                         except Exception as e:
                             end_time = original_time
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
                     
                     # 成功，跳出重试循环
                     self.check_page_long_delay()  # 页面成功处理后进行长休眠检查
@@ -1174,7 +1177,7 @@ class ZSXQInteractiveCrawler:
                     if self.is_stopped():
                         return total_stats
 
-                    print(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
+                    self.log(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
 
                     # 调整时间戳用于重试
                     if end_time:
@@ -1182,9 +1185,9 @@ class ZSXQInteractiveCrawler:
                             dt = datetime.fromisoformat(end_time.replace('+0800', '+08:00'))
                             dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                            print(f"   🔄 调整时间戳: {end_time}")
+                            self.log(f"   🔄 调整时间戳: {end_time}")
                         except Exception as e:
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
             
             # 如果重试次数用完仍然失败
             if retry_count >= max_retries_per_page:
@@ -1192,37 +1195,37 @@ class ZSXQInteractiveCrawler:
                 if self.is_stopped():
                     return total_stats
 
-                print(f"   🚫 页面 {current_page} 达到最大重试次数，跳过此页")
+                self.log(f"   🚫 页面 {current_page} 达到最大重试次数，跳过此页")
                 # 大幅度跳过问题区域
                 if end_time:
                     try:
                         dt = datetime.fromisoformat(end_time.replace('+0800', '+08:00'))
                         dt = dt - timedelta(hours=1)
                         end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                        print(f"   ⏰ 大幅度跳过时间段: {end_time} (减去1小时)")
+                        self.log(f"   ⏰ 大幅度跳过时间段: {end_time} (减去1小时)")
                     except Exception as e:
-                        print(f"   ⚠️ 大幅度时间戳调整失败: {e}")
+                        self.log(f"   ⚠️ 大幅度时间戳调整失败: {e}")
                 completed_pages += 1  # 跳过这一页
         
-        print(f"\n🏁 增量爬取完成:")
-        print(f"   📄 成功页数: {total_stats['pages']}")
-        print(f"   ✅ 新增话题: {total_stats['new_topics']}")
-        print(f"   🔄 更新话题: {total_stats['updated_topics']}")
+        self.log(f"\n🏁 增量爬取完成:")
+        self.log(f"   📄 成功页数: {total_stats['pages']}")
+        self.log(f"   ✅ 新增话题: {total_stats['new_topics']}")
+        self.log(f"   🔄 更新话题: {total_stats['updated_topics']}")
         if total_stats['errors'] > 0:
-            print(f"   ❌ 总错误数: {total_stats['errors']}")
+            self.log(f"   ❌ 总错误数: {total_stats['errors']}")
         
         # 显示更新后的数据库状态
         updated_info = self.db.get_timestamp_range_info()
-        print(f"\n📊 更新后数据库状态:")
-        print(f"   话题总数: {updated_info['total_topics']} (+{updated_info['total_topics'] - total_existing})")
-        print(f"   时间范围: {updated_info['oldest_timestamp']} ~ {updated_info['newest_timestamp']}")
+        self.log(f"\n📊 更新后数据库状态:")
+        self.log(f"   话题总数: {updated_info['total_topics']} (+{updated_info['total_topics'] - total_existing})")
+        self.log(f"   时间范围: {updated_info['oldest_timestamp']} ~ {updated_info['newest_timestamp']}")
         
         return total_stats
     
     def crawl_latest_until_complete(self, per_page: int = 20) -> Dict[str, int]:
         """获取最新记录：智能增量更新，爬取到与数据库完全衔接为止"""
-        print(f"\n🔄 获取最新记录模式 (每页{per_page}条)")
-        print(f"💡 智能逻辑：检查最新话题，如有新内容则向后爬取直到与数据库完全衔接")
+        self.log(f"\n🔄 获取最新记录模式 (每页{per_page}条)")
+        self.log(f"💡 智能逻辑：检查最新话题，如有新内容则向后爬取直到与数据库完全衔接")
         
         # 检查数据库状态
         timestamp_info = self.db.get_timestamp_range_info()
@@ -1230,9 +1233,9 @@ class ZSXQInteractiveCrawler:
             self.log("📊 数据库为空，将从最新开始爬取")
             # 空库场景：直接从最新开始增量，直到与已存数据衔接或无更多数据
         
-        print(f"📊 数据库状态:")
-        print(f"   现有话题数: {timestamp_info['total_topics']}")
-        print(f"   最新时间戳: {timestamp_info['newest_timestamp']}")
+        self.log(f"📊 数据库状态:")
+        self.log(f"   现有话题数: {timestamp_info['total_topics']}")
+        self.log(f"   最新时间戳: {timestamp_info['newest_timestamp']}")
         
         total_stats = {'new_topics': 0, 'updated_topics': 0, 'errors': 0, 'pages': 0}
         end_time = None  # 从最新开始
@@ -1255,7 +1258,7 @@ class ZSXQInteractiveCrawler:
                 if self.is_stopped():
                     return total_stats
                 if retry_count > 0:
-                    print(f"   🔄 第{retry_count}次重试")
+                    self.log(f"   🔄 第{retry_count}次重试")
                 
                 # 获取数据
                 if current_page == 1:
@@ -1271,7 +1274,7 @@ class ZSXQInteractiveCrawler:
                     topics = data.get('resp_data', {}).get('topics', [])
                     
                     if not topics:
-                        print(f"   📭 无更多数据，获取完成")
+                        self.log(f"   📭 无更多数据，获取完成")
                         break
                     
                     # 检查这一页的话题是否在数据库中全部存在
@@ -1286,36 +1289,36 @@ class ZSXQInteractiveCrawler:
                         else:
                             new_topics_list.append(topic)
                     
-                    print(f"   📊 页面分析: {len(topics)}个话题，{existing_count}个已存在，{len(new_topics_list)}个新话题")
+                    self.log(f"   📊 页面分析: {len(topics)}个话题，{existing_count}个已存在，{len(new_topics_list)}个新话题")
                     
                     # 判断是否需要停止
                     if existing_count == len(topics):
                         # 整页话题全部存在于数据库中
-                        print(f"   ✅ 整页话题全部存在于数据库，增量更新完成")
-                        print(f"\n🎉 获取最新记录完成总结:")
-                        print(f"   📄 检查页数: {total_stats['pages']}")
-                        print(f"   ✅ 新增话题: {total_stats['new_topics']}")
-                        print(f"   🔄 更新话题: {total_stats['updated_topics']}")
+                        self.log(f"   ✅ 整页话题全部存在于数据库，增量更新完成")
+                        self.log(f"\n🎉 获取最新记录完成总结:")
+                        self.log(f"   📄 检查页数: {total_stats['pages']}")
+                        self.log(f"   ✅ 新增话题: {total_stats['new_topics']}")
+                        self.log(f"   🔄 更新话题: {total_stats['updated_topics']}")
                         if total_stats['errors'] > 0:
-                            print(f"   ❌ 总错误数: {total_stats['errors']}")
+                            self.log(f"   ❌ 总错误数: {total_stats['errors']}")
                         
                         # 显示更新后的数据库状态
                         final_db_stats = self.db.get_timestamp_range_info()
                         if final_db_stats['has_data']:
-                            print(f"\n📊 数据库最终状态:")
-                            print(f"   话题总数: {final_db_stats['total_topics']} (+{final_db_stats['total_topics'] - timestamp_info['total_topics']})")
-                            print(f"   时间范围: {final_db_stats['oldest_timestamp']} ~ {final_db_stats['newest_timestamp']}")
+                            self.log(f"\n📊 数据库最终状态:")
+                            self.log(f"   话题总数: {final_db_stats['total_topics']} (+{final_db_stats['total_topics'] - timestamp_info['total_topics']})")
+                            self.log(f"   时间范围: {final_db_stats['oldest_timestamp']} ~ {final_db_stats['newest_timestamp']}")
                         
                         return total_stats
                     
                     elif existing_count == 0:
                         # 整页话题都是新的，全部存储
                         page_stats = self.store_batch_data(data)
-                        print(f"   💾 整页存储: 新增{page_stats['new_topics']}, 更新{page_stats['updated_topics']}")
+                        self.log(f"   💾 整页存储: 新增{page_stats['new_topics']}, 更新{page_stats['updated_topics']}")
                     
                     else:
                         # 部分话题是新的，只存储新话题
-                        print(f"   💾 部分存储: 只处理{len(new_topics_list)}个新话题")
+                        self.log(f"   💾 部分存储: 只处理{len(new_topics_list)}个新话题")
                         new_topics_count = 0
                         updated_topics_count = 0
                         
@@ -1335,11 +1338,11 @@ class ZSXQInteractiveCrawler:
                                     new_topics_count += 1
                                     
                             except Exception as e:
-                                print(f"   ⚠️ 话题导入失败: {e}")
+                                self.log(f"   ⚠️ 话题导入失败: {e}")
                         
                         # 提交事务
                         self.db.conn.commit()
-                        print(f"   💾 新话题存储: 新增{new_topics_count}, 更新{updated_topics_count}")
+                        self.log(f"   💾 新话题存储: 新增{new_topics_count}, 更新{updated_topics_count}")
                         
                         # 更新统计
                         total_stats['new_topics'] += new_topics_count
@@ -1354,13 +1357,13 @@ class ZSXQInteractiveCrawler:
                     total_stats['pages'] += 1
                     
                     # 显示当前进度
-                    print(f"   📈 累计: 新增{total_stats['new_topics']}, 更新{total_stats['updated_topics']}, 页数{total_stats['pages']}")
+                    self.log(f"   📈 累计: 新增{total_stats['new_topics']}, 更新{total_stats['updated_topics']}, 页数{total_stats['pages']}")
                     
                     # 显示时间戳信息
                     if topics:
                         first_time = topics[0].get('create_time', 'N/A')
                         last_time = topics[-1].get('create_time', 'N/A')
-                        print(f"   ⏰ 时间范围: {first_time} ~ {last_time}")
+                        self.log(f"   ⏰ 时间范围: {first_time} ~ {last_time}")
                     
                     # 准备下一页的时间戳
                     if topics:
@@ -1372,7 +1375,7 @@ class ZSXQInteractiveCrawler:
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
                         except Exception as e:
                             end_time = original_time
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
                     
                     # 成功，跳出重试循环
                     page_success = True
@@ -1386,7 +1389,7 @@ class ZSXQInteractiveCrawler:
                     if self.is_stopped():
                         return total_stats
 
-                    print(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
+                    self.log(f"   ❌ 页面 {current_page} 获取失败 (重试{retry_count}/{max_retries_per_page})")
 
                     # 调整时间戳用于重试
                     if end_time:
@@ -1396,14 +1399,14 @@ class ZSXQInteractiveCrawler:
                             dt = dt - timedelta(milliseconds=self.timestamp_offset_ms)
                             end_time = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
                         except Exception as e:
-                            print(f"   ⚠️ 时间戳调整失败: {e}")
+                            self.log(f"   ⚠️ 时间戳调整失败: {e}")
             
             # 如果重试次数用完仍然失败
             if not page_success:
                 # 如果任务已停止，不再打印信息
                 if self.is_stopped():
                     break
-                print(f"   🚫 页面 {current_page} 达到最大重试次数，停止获取")
+                self.log(f"   🚫 页面 {current_page} 达到最大重试次数，停止获取")
                 break
             else:
                 # 页面成功处理后进行长休眠检查（基于页面数而非请求数）
@@ -1413,37 +1416,37 @@ class ZSXQInteractiveCrawler:
     
     def show_menu(self):
         """显示交互菜单"""
-        print(f"\n{'='*60}")
-        print("🕷️ 知识星球交互式数据采集器")
-        print("="*60)
-        print("📝 话题采集功能:")
-        print("1. 获取所有历史数据 (无限爬取) - 适合：全量归档，从最老数据无限挖掘")
-        print("2. 增量爬取历史 (基于数据库最老时间戳) - 适合：精确补充历史，有目标的回填")
-        print("3. 获取最新记录 (智能增量更新) - 适合：日常维护，自动检测并只爬新内容")
-        print("")
-        print("📥 文件下载功能:")
-        print("4. 增量收集文件列表 - 适合：从数据库最老时间戳继续收集更早文件")
-        print("5. 查看文件数据库统计 - 适合：查看收集的文件信息和下载状态")
-        print("6. 按下载次数下载文件 - 适合：自动收集热门文件并按下载次数排序下载")
-        print("7. 按时间顺序下载文件 - 适合：自动收集文件列表并按时间顺序下载")
-        print("8. 文件下载设置 - 适合：调整下载间隔和休眠参数")
-        print("")
-        print("⚙️ 系统功能:")
-        print("9. 查看话题数据库统计 - 适合：监控话题数据状态，了解当前数据范围")
-        print("10. 调整反检测设置 - 适合：优化爬取速度，应对不同网络环境")
-        print(f"11. 时间戳设置 (当前: 减去{self.timestamp_offset_ms}毫秒) - 适合：解决时间点冲突，精确控制分页")
-        print(f"12. 调试模式 (当前: {'开启' if self.debug_mode else '关闭'}) - 适合：排查问题，查看详细请求信息")
-        print("13. 退出程序")
-        print("="*60)
+        self.log(f"\n{'='*60}")
+        self.log("🕷️ 知识星球交互式数据采集器")
+        self.log("="*60)
+        self.log("📝 话题采集功能:")
+        self.log("1. 获取所有历史数据 (无限爬取) - 适合：全量归档，从最老数据无限挖掘")
+        self.log("2. 增量爬取历史 (基于数据库最老时间戳) - 适合：精确补充历史，有目标的回填")
+        self.log("3. 获取最新记录 (智能增量更新) - 适合：日常维护，自动检测并只爬新内容")
+        self.log("")
+        self.log("📥 文件下载功能:")
+        self.log("4. 增量收集文件列表 - 适合：从数据库最老时间戳继续收集更早文件")
+        self.log("5. 查看文件数据库统计 - 适合：查看收集的文件信息和下载状态")
+        self.log("6. 按下载次数下载文件 - 适合：自动收集热门文件并按下载次数排序下载")
+        self.log("7. 按时间顺序下载文件 - 适合：自动收集文件列表并按时间顺序下载")
+        self.log("8. 文件下载设置 - 适合：调整下载间隔和休眠参数")
+        self.log("")
+        self.log("⚙️ 系统功能:")
+        self.log("9. 查看话题数据库统计 - 适合：监控话题数据状态，了解当前数据范围")
+        self.log("10. 调整反检测设置 - 适合：优化爬取速度，应对不同网络环境")
+        self.log(f"11. 时间戳设置 (当前: 减去{self.timestamp_offset_ms}毫秒) - 适合：解决时间点冲突，精确控制分页")
+        self.log(f"12. 调试模式 (当前: {'开启' if self.debug_mode else '关闭'}) - 适合：排查问题，查看详细请求信息")
+        self.log("13. 退出程序")
+        self.log("="*60)
     
     def adjust_stealth_settings(self):
         """调整反检测设置"""
-        print(f"\n🔧 当前反检测设置:")
-        print(f"   最小延迟: {self.min_delay}秒")
-        print(f"   最大延迟: {self.max_delay}秒")
-        print(f"   长延迟间隔: 每{self.long_delay_interval}个页面")
-        print(f"   长休眠时间: 3-5分钟 (180-300秒)")
-        print(f"💡 说明: 长休眠基于成功处理的页面数，而非请求数，更加合理稳定")
+        self.log(f"\n🔧 当前反检测设置:")
+        self.log(f"   最小延迟: {self.min_delay}秒")
+        self.log(f"   最大延迟: {self.max_delay}秒")
+        self.log(f"   长延迟间隔: 每{self.long_delay_interval}个页面")
+        self.log(f"   长休眠时间: 3-5分钟 (180-300秒)")
+        self.log(f"💡 说明: 长休眠基于成功处理的页面数，而非请求数，更加合理稳定")
         
         try:
             new_min = float(input(f"新的最小延迟 (当前{self.min_delay}): ") or self.min_delay)
@@ -1454,34 +1457,34 @@ class ZSXQInteractiveCrawler:
             self.max_delay = max(new_max, self.min_delay + 1.0)
             self.long_delay_interval = max(new_interval, 5)
             
-            print(f"✅ 设置已更新")
-            print(f"💡 长休眠时间固定为3-5分钟，有助于更好地模拟人类行为")
-            print(f"🎯 长休眠触发：每成功处理{self.long_delay_interval}个页面进行一次长休眠")
+            self.log(f"✅ 设置已更新")
+            self.log(f"💡 长休眠时间固定为3-5分钟，有助于更好地模拟人类行为")
+            self.log(f"🎯 长休眠触发：每成功处理{self.long_delay_interval}个页面进行一次长休眠")
             
         except ValueError:
-            print("❌ 输入无效，保持原设置")
+            self.log("❌ 输入无效，保持原设置")
     
     def adjust_timestamp_settings(self):
         """调整时间戳设置"""
-        print(f"\n⏰ 当前时间戳设置:")
-        print(f"   减去毫秒数: {self.timestamp_offset_ms}毫秒")
-        print(f"\n💡 说明:")
-        print(f"   - 减去1毫秒: 标准设置，与官网一致")
-        print(f"   - 减去2-3毫秒: 可能避开某些问题时间点")
-        print(f"   - 减去5-10毫秒: 更大的容错范围")
+        self.log(f"\n⏰ 当前时间戳设置:")
+        self.log(f"   减去毫秒数: {self.timestamp_offset_ms}毫秒")
+        self.log(f"\n💡 说明:")
+        self.log(f"   - 减去1毫秒: 标准设置，与官网一致")
+        self.log(f"   - 减去2-3毫秒: 可能避开某些问题时间点")
+        self.log(f"   - 减去5-10毫秒: 更大的容错范围")
         
         try:
             new_offset = int(input(f"新的毫秒偏移量 (当前{self.timestamp_offset_ms}): ") or self.timestamp_offset_ms)
             
             if new_offset < 0:
-                print("❌ 毫秒偏移量不能为负数")
+                self.log("❌ 毫秒偏移量不能为负数")
                 return
             
             self.timestamp_offset_ms = new_offset
-            print(f"✅ 时间戳设置已更新: 减去{self.timestamp_offset_ms}毫秒")
+            self.log(f"✅ 时间戳设置已更新: 减去{self.timestamp_offset_ms}毫秒")
             
         except ValueError:
-            print("❌ 输入无效，保持原设置")
+            self.log("❌ 输入无效，保持原设置")
     
     def run_interactive(self):
         """运行交互式界面"""
@@ -1522,19 +1525,19 @@ class ZSXQInteractiveCrawler:
                     existing_files = stats.get('files', 0)
                     
                     if existing_files > 0:
-                        print(f"📊 数据库中已有 {existing_files} 个文件记录")
+                        self.log(f"📊 数据库中已有 {existing_files} 个文件记录")
                         collect_confirm = input("是否重新收集文件列表? (y/n, 默认n直接下载): ").strip().lower()
                         if collect_confirm != 'y':
-                            print("⚡ 直接使用现有数据进行下载...")
+                            self.log("⚡ 直接使用现有数据进行下载...")
                         else:
-                            print("🔄 按下载次数重新收集文件列表...")
+                            self.log("🔄 按下载次数重新收集文件列表...")
                             downloader.collect_all_files_to_database()
                     else:
-                        print("🔄 按下载次数收集热门文件列表...")
+                        self.log("🔄 按下载次数收集热门文件列表...")
                         downloader.collect_all_files_to_database()
                     
                     # 自动开始下载
-                    print("\n🚀 自动开始下载文件...")
+                    self.log("\n🚀 自动开始下载文件...")
                     user_input = input("最大下载文件数 (默认无限，输入数字限制): ").strip()
                     if user_input and user_input.isdigit():
                         max_files = int(user_input)
@@ -1557,19 +1560,19 @@ class ZSXQInteractiveCrawler:
                     existing_files = stats.get('files', 0)
                     
                     if existing_files > 0:
-                        print(f"📊 数据库中已有 {existing_files} 个文件记录")
+                        self.log(f"📊 数据库中已有 {existing_files} 个文件记录")
                         collect_confirm = input("是否重新收集文件列表? (y/n, 默认n直接下载): ").strip().lower()
                         if collect_confirm != 'y':
-                            print("⚡ 直接使用现有数据进行下载...")
+                            self.log("⚡ 直接使用现有数据进行下载...")
                         else:
-                            print("🔄 按时间排序重新收集文件列表...")
+                            self.log("🔄 按时间排序重新收集文件列表...")
                             downloader.collect_files_by_time()
                     else:
-                        print("🔄 按时间排序收集文件列表...")
+                        self.log("🔄 按时间排序收集文件列表...")
                         downloader.collect_files_by_time()
                     
                     # 自动开始下载
-                    print("\n🚀 自动开始下载文件...")
+                    self.log("\n🚀 自动开始下载文件...")
                     user_input = input("最大下载文件数 (默认无限，输入数字限制): ").strip()
                     if user_input and user_input.isdigit():
                         max_files = int(user_input)
@@ -1593,9 +1596,9 @@ class ZSXQInteractiveCrawler:
                     # 查看话题数据库统计
                     self.show_database_status()
                     stats = self.db.get_database_stats()
-                    print("\n📊 详细统计:")
+                    self.log("\n📊 详细统计:")
                     for table, count in stats.items():
-                        print(f"   {table}: {count}")
+                        self.log(f"   {table}: {count}")
                     
                 elif choice == "10":
                     self.adjust_stealth_settings()
@@ -1606,30 +1609,30 @@ class ZSXQInteractiveCrawler:
                 elif choice == "12":
                     self.debug_mode = not self.debug_mode
                     status = "开启" if self.debug_mode else "关闭"
-                    print(f"🔍 调试模式已{status}")
+                    self.log(f"🔍 调试模式已{status}")
                     if self.debug_mode:
-                        print("⚠️ 调试模式会输出详细的请求信息，包括完整的失败响应")
+                        self.log("⚠️ 调试模式会输出详细的请求信息，包括完整的失败响应")
                     
                 elif choice == "13":
-                    print("👋 退出程序")
+                    self.log("👋 退出程序")
                     break
                     
                 else:
-                    print("❌ 无效选择")
+                    self.log("❌ 无效选择")
                 
                 input("\n按回车键继续...")
                 
         except KeyboardInterrupt:
-            print("\n⏹️ 用户中断")
+            self.log("\n⏹️ 用户中断")
         except Exception as e:
-            print(f"❌ 程序异常: {e}")
+            self.log(f"❌ 程序异常: {e}")
         finally:
             self.close()
     
     def close(self):
         """关闭资源"""
         self.db.close()
-        print("🔒 数据库连接已关闭")
+        self.log("🔒 数据库连接已关闭")
 
 
 def load_config():
@@ -1651,18 +1654,18 @@ def load_config():
             break
 
     if config_file is None:
-        print("⚠️ 未找到config.toml配置文件，请先创建并配置")
-        print("💡 可以复制config.toml.example为config.toml并修改")
+        log_warning("⚠️ 未找到config.toml配置文件，请先创建并配置")
+        log_warning("💡 可以复制config.toml.example为config.toml并修改")
         return None
     
     try:
         with open(config_file, 'rb') as f:
             config = tomllib.load(f)
         
-        print("✅ 已从config.toml加载配置")
+        log_info("✅ 已从config.toml加载配置")
         return config
     except Exception as e:
-        print(f"❌ 加载配置文件出错: {e}")
+        log_error(f"❌ 加载配置文件出错: {e}", exception=e)
         return None
 
 def main():
@@ -1689,10 +1692,10 @@ def main():
     
     # 检查配置是否已修改
     if COOKIE == "your_cookie_here" or not COOKIE:
-        print("⚠️ 请先在config.toml中配置您的 cookie")
+        log_warning("⚠️ 请先在config.toml中配置您的 cookie")
         return
     if GROUP_ID == "your_group_id_here" or not GROUP_ID:
-        print("⚠️ 交互式命令行模式仍需手动指定单个群组ID，请在 config.toml 中添加 [auth].group_id")
+        log_warning("⚠️ 交互式命令行模式仍需手动指定单个群组ID，请在 config.toml 中添加 [auth].group_id")
         return
     
     # 创建交互式爬虫
@@ -1700,17 +1703,17 @@ def main():
     
     # 如果是自动下载模式
     if args.auto_download:
-        print("🤖 自动下载模式：按时间排序下载最近3天的文件")
-        print("=" * 60)
+        log_info("🤖 自动下载模式：按时间排序下载最近3天的文件")
+        log_info("=" * 60)
         
         # 获取文件下载器
         downloader = crawler.get_file_downloader()
         
-        print("🔄 按时间排序收集文件列表...")
+        log_info("🔄 按时间排序收集文件列表...")
         downloader.collect_files_by_time()
         
         # 自动下载最近3天的文件
-        print("\n🚀 开始下载最近3天的文件...")
+        log_info("\n🚀 开始下载最近3天的文件...")
         downloader.download_files_from_database(
             max_files=None,
             status_filter='pending',
@@ -1718,7 +1721,7 @@ def main():
             order_by="create_time DESC"
         )
         
-        print("\n✅ 自动下载任务完成！")
+        log_info("\n✅ 自动下载任务完成！")
     else:
         # 运行交互界面
         crawler.run_interactive()

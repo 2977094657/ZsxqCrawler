@@ -49,7 +49,16 @@ from .image_cache_manager import get_image_cache_manager
 from .accounts_sql_manager import get_accounts_sql_manager
 from .account_info_db import get_account_info_db
 from .zsxq_columns_database import ZSXQColumnsDatabase
-from .logger_config import log_info, log_warning, log_error, log_exception, log_debug, ensure_configured
+from .logger_config import (
+    bind_context,
+    ensure_configured,
+    log_debug,
+    log_error,
+    log_exception,
+    log_info,
+    log_task_event,
+    log_warning,
+)
 from .zsxq_markdown_exporter import (
     article_html_to_markdown,
     column_topic_detail_to_markdown,
@@ -68,11 +77,13 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时扫描本地群"""
     # 启动时执行
     try:
+        log_info("应用启动: 开始扫描本地群")
         await asyncio.to_thread(scan_local_groups)
+        log_info("应用启动: 本地群扫描完成")
     except Exception as e:
-        print(f"⚠️ 启动扫描本地群失败: {e}")
+        log_error(f"应用启动: 本地群扫描失败: {e}", exception=e)
     yield
-    # 关闭时执行（如需要可添加清理逻辑）
+    log_info("应用关闭: lifespan 退出")
 
 
 app = FastAPI(
@@ -90,6 +101,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_http_requests(request: Request, call_next):
+    """记录每个 HTTP 请求的关键诊断信息。"""
+    request_id = request.headers.get("X-Request-ID") or f"req_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+    request_logger = bind_context(request_id=request_id)
+    started_at = time.perf_counter()
+    client_host = request.client.host if request.client else "-"
+    method = request.method
+    path = request.url.path
+
+    request_logger.debug(
+        "HTTP request started: method={} path={} client={}",
+        method,
+        path,
+        client_host,
+    )
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        request_logger.opt(exception=exc).error(
+            "HTTP request failed: method={} path={} duration_ms={:.2f} client={}",
+            method,
+            path,
+            duration_ms,
+            client_host,
+        )
+        raise
+
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    response.headers["X-Request-ID"] = request_id
+    level = "ERROR" if response.status_code >= 500 else "WARNING" if response.status_code >= 400 else "INFO"
+    request_logger.log(
+        level,
+        "HTTP request finished: method={} path={} status={} duration_ms={:.2f} client={}",
+        method,
+        path,
+        response.status_code,
+        duration_ms,
+        client_host,
+    )
+    return response
 
 # 全局变量存储爬虫实例和任务状态
 crawler_instance: Optional[ZSXQInteractiveCrawler] = None
@@ -393,8 +449,32 @@ def add_task_log(task_id: str, log_message: str):
     formatted_log = f"[{timestamp}] {log_message}"
     task_logs[task_id].append(formatted_log)
 
+    task_info = current_tasks.get(task_id, {})
+    log_level = _infer_task_log_level(log_message)
+    try:
+        log_task_event(
+            task_id,
+            log_message,
+            level=log_level,
+            group_id=task_info.get("group_id"),
+            task_type=task_info.get("type"),
+        )
+    except Exception as exc:
+        # 任务日志落盘失败不能影响任务本身，错误仍尽量写入全局日志。
+        log_error(f"写入任务日志失败: task_id={task_id}, error={exc}", exception=exc)
+
     # 广播日志到所有SSE连接
     broadcast_log(task_id, formatted_log)
+
+
+def _infer_task_log_level(log_message: str) -> str:
+    """根据任务日志内容推断日志级别，便于错误文件聚合。"""
+    message = str(log_message)
+    if any(marker in message for marker in ("❌", "失败", "异常", "错误", "failed", "error")):
+        return "ERROR"
+    if any(marker in message for marker in ("⚠️", "警告", "重试", "warning", "retry")):
+        return "WARNING"
+    return "INFO"
 
 def broadcast_log(task_id: str, log_message: str):
     """广播日志到SSE连接"""
@@ -6241,4 +6321,5 @@ if __name__ == "__main__":
             port = int(sys.argv[2])
         except ValueError:
             port = 8208
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    log_info(f"启动后端服务: host=0.0.0.0, port={port}")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_config=None, access_log=True)
