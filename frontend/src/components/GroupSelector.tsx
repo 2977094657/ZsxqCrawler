@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { MessageSquare, Crown, UserCog, RefreshCw, Trash2, Loader2, Download, Upload } from 'lucide-react';
+import { MessageSquare, Crown, UserCog, RefreshCw, Trash2, Loader2, Download, Upload, HardDrive } from 'lucide-react';
 import { apiClient, Group, GroupStats, ImportPreview } from '@/lib/api';
 import { toast } from 'sonner';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
@@ -26,8 +26,11 @@ type ResetAllResponse = {
   success?: boolean;
   message?: string;
 };
+type DeleteGroupResponse = {
+  message?: string;
+};
 
-export default function GroupSelector(_props: GroupSelectorProps) {
+export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   const router = useRouter();
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupStats, setGroupStats] = useState<Record<number, GroupStats>>({});
@@ -217,6 +220,7 @@ export default function GroupSelector(_props: GroupSelectorProps) {
   // 这样即使详情页本身首次加载较慢，用户也能立即看到反馈。
   const handleSelectGroup = (group: Group) => {
     if (navigatingTo) return; // 防止重复点击
+    onGroupSelected?.(group);
     setNavigatingTo({ id: group.group_id, name: group.name });
     router.push(`/groups/${group.group_id}`);
   };
@@ -236,8 +240,8 @@ export default function GroupSelector(_props: GroupSelectorProps) {
     if (deletingGroups.has(groupId)) return;
     setDeletingGroups((prev) => new Set(prev).add(groupId));
     try {
-      const res = await apiClient.deleteGroup(groupId);
-      const msg = (res as any)?.message || '已删除';
+      const res = await apiClient.deleteGroup(groupId) as DeleteGroupResponse;
+      const msg = res.message || '已删除';
       toast.success(msg);
       await loadGroups(0);
     } catch (err) {
@@ -354,15 +358,6 @@ export default function GroupSelector(_props: GroupSelectorProps) {
     }
   };
 
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return '';
-    try {
-      return new Date(dateString).toLocaleDateString('zh-CN');
-    } catch {
-      return '';
-    }
-  };
-
   const formatDateTime = (dateString?: string) => {
     if (!dateString) return '';
     try {
@@ -452,6 +447,7 @@ export default function GroupSelector(_props: GroupSelectorProps) {
     const stats = groupStats[group.group_id];
     const hasAccount = !group.source || group.source.includes('account');
     const hasLocal = !!group.source && group.source.includes('local');
+    const storageSize = group.size_bytes || 0;
 
     const isNavigating = navigatingTo?.id === group.group_id;
 
@@ -507,6 +503,14 @@ export default function GroupSelector(_props: GroupSelectorProps) {
                 <span>{stats.topics_count || 0}</span>
               </div>
             )}
+          </div>
+
+          <div
+            className="flex items-center gap-1 text-[11px] text-muted-foreground mb-1.5"
+            title={`本地存储占用：${formatBytes(storageSize)}`}
+          >
+            <HardDrive className="h-3 w-3 shrink-0" />
+            <span className="truncate">存储 {formatBytes(storageSize)}</span>
           </div>
 
           {/* 来源标签 + 状态标签 + 操作按钮 */}

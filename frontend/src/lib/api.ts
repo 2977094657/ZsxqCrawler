@@ -130,6 +130,7 @@ export interface Group {
   last_active_time?: string;
   status?: string;
   source?: string; // "account" | "local" | "account|local"
+  size_bytes?: number; // 本地存储占用大小，单位：字节
   is_trial?: boolean;
   trial_end_time?: string;
   membership_end_time?: string;

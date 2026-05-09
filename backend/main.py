@@ -192,7 +192,7 @@ def _safe_listdir(path: str):
 
 def _collect_numeric_dirs(base: str, limit: int) -> set:
     """
-    扫描 base 的一级子目录，收集纯数字目录名（^\d+$）作为群ID。
+    扫描 base 的一级子目录，收集纯数字目录名（^\\d+$）作为群ID。
     忽略：非目录、软链接、隐藏目录（以 . 开头）。
     """
     ids = set()
@@ -699,6 +699,32 @@ def _get_directory_size(path: str) -> int:
             except OSError:
                 continue
     return total
+
+
+def _get_existing_group_dirs(group_id: str) -> List[str]:
+    """获取社群已存在的本地数据目录，不创建新目录。"""
+    path_manager = get_db_path_manager()
+    output_dir = _get_output_dir()
+    candidates = [
+        os.path.join(path_manager.base_dir, str(group_id)),
+        os.path.join(output_dir, str(group_id)),
+        os.path.join(output_dir, "databases", str(group_id)),
+    ]
+
+    existing: List[str] = []
+    seen = set()
+    for path in candidates:
+        abs_path = os.path.abspath(path)
+        if abs_path in seen or not os.path.isdir(abs_path):
+            continue
+        seen.add(abs_path)
+        existing.append(abs_path)
+    return existing
+
+
+def _get_group_storage_size(group_id: str) -> int:
+    """统计单个社群本地占用大小，包含数据库、下载文件、图片缓存与专栏资源。"""
+    return sum(_get_directory_size(path) for path in _get_existing_group_dirs(group_id))
 
 
 def _load_group_meta_from_file(group_dir: str) -> Dict[str, Any]:
@@ -3295,7 +3321,12 @@ async def get_groups():
     try:
         # 自动构建群组→账号映射（多账号支持）
         group_account_map = build_account_group_detection()
-        local_ids = get_cached_local_group_ids(force_refresh=False)
+        # 首页需要实时展示本地占用大小，因此每次取群组列表时刷新本地目录索引。
+        local_ids = get_cached_local_group_ids(force_refresh=True)
+        local_storage_sizes = {
+            int(gid): _get_group_storage_size(str(gid))
+            for gid in (local_ids or [])
+        }
 
         # 获取“当前账号”的群列表（优先账号默认账号，其次config.toml；若未配置则视为空集合）
         groups_data: List[dict] = []
@@ -3361,7 +3392,8 @@ async def get_groups():
                 "trial_end_time": trial.get('end_time'),
                 "membership_end_time": validity.get('end_time'),
                 "account": group_account_map.get(str(gid)),
-                "source": "account"
+                "source": "account",
+                "size_bytes": local_storage_sizes.get(gid, 0),
             }
             by_id[gid] = info
 
@@ -3376,6 +3408,7 @@ async def get_groups():
                 src = by_id[gid_int].get("source", "account")
                 if "local" not in src:
                     by_id[gid_int]["source"] = "account|local"
+                by_id[gid_int]["size_bytes"] = local_storage_sizes.get(gid_int, 0)
                 _persist_group_meta_local(gid_int, by_id[gid_int])
             else:
                 # 仅存在于本地：优先从 group_meta.json 读取元信息，其次从本地数据库补全
@@ -3493,6 +3526,7 @@ async def get_groups():
                     "membership_end_time": None,
                     "account": None,
                     "source": "local",
+                    "size_bytes": local_storage_sizes.get(gid_int, 0),
                 }
 
         # 排序：按群ID升序；如需二级排序再按来源（账号优先）
