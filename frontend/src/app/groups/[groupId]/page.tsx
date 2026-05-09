@@ -21,6 +21,7 @@ import { createSafeHtml, createSafeHtmlWithHighlight, extractPlainText } from '@
 import DownloadSettingsDialog from '@/components/DownloadSettingsDialog';
 import CrawlSettingsDialog from '@/components/CrawlSettingsDialog';
 import ImageGallery from '@/components/ImageGallery';
+import ModeTip from '@/components/ModeTip';
 
 // 话题详情缓存，避免重复请求
 const topicDetailCache: Map<string, any> = new Map();
@@ -221,7 +222,7 @@ export default function GroupDetailPage() {
   const [activeTab, setActiveTab] = useState('topics');
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
-  const [selectedCrawlOption, setSelectedCrawlOption] = useState<'latest' | 'incremental' | 'all' | 'range' | null>('all');
+  const [selectedCrawlOption, setSelectedCrawlOption] = useState<'latest' | 'all' | 'range' | null>('all');
   const [selectedDownloadOption, setSelectedDownloadOption] = useState<'time' | 'count' | null>('time');
   // 注意：topic_id 可能超过 JS 安全整数范围，这里统一按字符串处理 ID
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
@@ -333,6 +334,13 @@ const [quickLastDays, setQuickLastDays] = useState<number>(30);
 const [rangeStartDate, setRangeStartDate] = useState<string>('');
 const [rangeEndDate, setRangeEndDate] = useState<string>('');
 const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
+
+  const hasLocalTopics = (groupStats?.topics_count || 0) > 0;
+  const allCrawlLabel = hasLocalTopics ? '继续爬取' : '全量爬取';
+  const allCrawlDialogTitle = hasLocalTopics ? '确认继续爬取' : '确认全量爬取';
+  const allCrawlDialogDescription = hasLocalTopics
+    ? '当前群组已有本地话题数据，将从数据库中最老话题时间继续向更早历史爬取，直到没有更多数据。'
+    : '当前群组暂无本地话题数据，将从最新话题开始持续向历史爬取，直到没有更多数据。首次采集推荐使用此模式。';
 
   // 单个话题采集状态
   const [singleTopicId, setSingleTopicId] = useState<string>('');
@@ -701,38 +709,6 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     }
   };
 
-  const handleIncrementalCrawl = async () => {
-    try {
-      setCrawlLoading('incremental');
-
-      // 构建爬取设置参数
-      const crawlSettings = {
-        crawlIntervalMin,
-        crawlIntervalMax,
-        longSleepIntervalMin: crawlLongSleepIntervalMin,
-        longSleepIntervalMax: crawlLongSleepIntervalMax,
-        pagesPerBatch: Math.max(crawlPagesPerBatch, 5)
-      };
-
-      const response = await apiClient.crawlIncremental(groupId, 10, 20, crawlSettings);
-      toast.success(`增量爬取任务已创建: ${(response as any).task_id}`);
-
-      // 设置当前任务ID以显示日志
-      setCurrentTaskId((response as any).task_id);
-      // 自动切换到日志标签页
-      setActiveTab('logs');
-
-      setTimeout(() => {
-        loadGroupStats();
-        loadTopics();
-        loadRecentTasks();
-      }, 2000);
-    } catch (error) {
-      toast.error(`增量爬取失败: ${error instanceof Error ? error.message : '未知错误'}`);
-    } finally {
-      setCrawlLoading(null);
-    }
-  };
   const handleCrawlRange = async () => {
     try {
       setLatestDialogOpen(false);
@@ -2459,7 +2435,14 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                   <TabsContent value="crawl" className="space-y-3 mt-4">
                     <div className="space-y-2">
                       {/* 单个话题采集（测试） */}
-                      <div className="border rounded-lg p-3 cursor-pointer transition-all border-blue-200 hover:bg-blue-50">
+                      <div className="relative border rounded-lg p-3 pr-8 cursor-pointer transition-all border-blue-200 hover:bg-blue-50">
+                        <ModeTip>
+                          <div className="space-y-1">
+                            <p className="font-medium text-gray-900">采集单个话题</p>
+                            <p>只根据输入的话题 ID 拉取该话题详情并写入本地数据库。</p>
+                            <p>适合补漏、测试 Cookie 或单独刷新某个话题。</p>
+                          </div>
+                        </ModeTip>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <FileText className="h-3 w-3 text-blue-600" />
@@ -2486,24 +2469,32 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                         </div>
                       </div>
 
-                      {/* 全量爬取 */}
+                      {/* 全量/继续爬取 */}
                       <div
-                        className={`border rounded-lg p-3 cursor-pointer transition-all ${
+                        className={`relative border rounded-lg p-3 pr-8 cursor-pointer transition-all ${
                           selectedCrawlOption === 'all'
                             ? 'bg-orange-50 border-orange-200'
                             : 'border-gray-200 hover:bg-gray-50'
                         }`}
                         onClick={() => setSelectedCrawlOption('all')}
                       >
+                        <ModeTip>
+                          <div className="space-y-1">
+                            <p className="font-medium text-gray-900">{allCrawlLabel}</p>
+                            <p>无本地数据时：从最新话题开始做首次完整归档。</p>
+                            <p>已有本地数据时：从数据库最老话题时间继续向历史爬取。</p>
+                            <p>该模式会一直运行到没有更多历史数据。</p>
+                          </div>
+                        </ModeTip>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <BarChart3 className={`h-3 w-3 ${selectedCrawlOption === 'all' ? 'text-orange-600' : 'text-gray-400'}`} />
                             <span className={`text-xs font-medium ${selectedCrawlOption === 'all' ? 'text-orange-700' : 'text-gray-600'}`}>
-                              全量爬取
+                              {allCrawlLabel}
                             </span>
                           </div>
-                          {(!groupStats || groupStats.topics_count === 0) && (
-                            <Badge variant="secondary" className="text-xs px-1 py-0">首次必选</Badge>
+                          {!hasLocalTopics && (
+                            <Badge variant="secondary" className="text-xs px-1 py-0">推荐</Badge>
                           )}
                         </div>
                         {selectedCrawlOption === 'all' && (
@@ -2514,17 +2505,17 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                                 className="w-full h-7 text-xs bg-orange-600 hover:bg-orange-700"
                                 disabled={!!crawlLoading}
                               >
-                                {crawlLoading === 'all' ? '执行中...' : '开始'}
+                                {crawlLoading === 'all' ? '执行中...' : allCrawlLabel}
                               </Button>
                             </AlertDialogTrigger>
                             <AlertDialogContent>
                               <AlertDialogHeader>
-                                <AlertDialogTitle>确认全量爬取</AlertDialogTitle>
+                                <AlertDialogTitle>{allCrawlDialogTitle}</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  ⚠️ 全量爬取将持续爬取直到没有数据，可能需要很长时间。
+                                  ⚠️ {allCrawlDialogDescription}
                                   <br />
                                   <br />
-                                  确认开始全量爬取吗？
+                                  确认开始吗？
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
@@ -2543,7 +2534,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
 
                       {/* 获取最新记录 */}
                       <div
-                        className={`border rounded-lg p-3 cursor-pointer transition-all ${
+                        className={`relative border rounded-lg p-3 pr-8 cursor-pointer transition-all ${
                           selectedCrawlOption === 'latest'
                             ? 'bg-blue-50 border-blue-200'
                             : 'border-gray-200 hover:bg-gray-50'
@@ -2553,6 +2544,14 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                           setLatestDialogOpen(true);
                         }}
                       >
+                        <ModeTip>
+                          <div className="space-y-1">
+                            <p className="font-medium text-gray-900">获取最新</p>
+                            <p>默认从最新话题开始抓取。</p>
+                            <p>如果本地已有数据，会向后抓取到与本地数据衔接为止。</p>
+                            <p>弹窗内也可以选择最近 N 天或自定义时间范围。</p>
+                          </div>
+                        </ModeTip>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <RefreshCw className={`h-3 w-3 ${selectedCrawlOption === 'latest' ? 'text-blue-600' : 'text-gray-400'}`} />
@@ -2560,7 +2559,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                               获取最新
                             </span>
                           </div>
-                          {groupStats && groupStats.topics_count > 0 && (
+                          {hasLocalTopics && (
                             <Badge variant="secondary" className="text-xs px-1 py-0">推荐</Badge>
                           )}
                         </div>
@@ -2747,43 +2746,6 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                       )}
                       
                       {/* 数据管理 */}
-                      </div>
-
-                      {/* 增量爬取 */}
-                      <div
-                        className={`border rounded-lg p-3 cursor-pointer transition-all ${
-                          selectedCrawlOption === 'incremental'
-                            ? 'bg-green-50 border-green-200'
-                            : (!groupStats || groupStats.topics_count === 0)
-                              ? 'border-gray-200 bg-gray-50 opacity-50 cursor-not-allowed'
-                              : 'border-gray-200 hover:bg-gray-50'
-                        }`}
-                        onClick={() => {
-                          if (!groupStats || groupStats.topics_count === 0) {
-                            toast.error('数据库为空，请先执行全量爬取');
-                            return;
-                          }
-                          setSelectedCrawlOption('incremental');
-                        }}
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <TrendingUp className={`h-3 w-3 ${selectedCrawlOption === 'incremental' ? 'text-green-600' : 'text-gray-400'}`} />
-                            <span className={`text-xs font-medium ${selectedCrawlOption === 'incremental' ? 'text-green-700' : 'text-gray-600'}`}>
-                              增量爬取
-                            </span>
-                          </div>
-                        </div>
-                        {selectedCrawlOption === 'incremental' && (
-                          <Button
-                            size="sm"
-                            className="w-full h-7 text-xs bg-green-600 hover:bg-green-700"
-                            onClick={handleIncrementalCrawl}
-                            disabled={!!crawlLoading}
-                          >
-                            {crawlLoading === 'incremental' ? '执行中...' : '开始'}
-                          </Button>
-                        )}
                       </div>
 
                       {/* 数据管理 */}
@@ -3005,10 +2967,9 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                       <span className="text-xs font-medium text-blue-900">任务执行中</span>
                     </div>
                     <p className="text-xs text-blue-600">
-                      {crawlLoading === 'historical' && '正在增量爬取历史数据...'}
-                      {crawlLoading === 'all' && '正在全量爬取所有数据...'}
-                      {crawlLoading === 'incremental' && '正在精确增量爬取...'}
+                      {crawlLoading === 'all' && (hasLocalTopics ? '正在继续向历史爬取...' : '正在全量爬取所有数据...')}
                       {crawlLoading === 'latest' && '正在获取最新记录...'}
+                      {crawlLoading === 'range' && '正在按时间区间采集...'}
                       {fileLoading === 'download-time' && '正在按时间顺序下载文件...'}
                       {fileLoading === 'download-count' && '正在按下载次数下载文件...'}
                       {fileLoading === 'clear' && '正在删除文件数据库...'}

@@ -1,17 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Settings } from 'lucide-react';
-import { apiClient, Group } from '@/lib/api';
+import { apiClient, Group, GroupStats, TaskCreateResponse } from '@/lib/api';
 import { toast } from 'sonner';
 import CrawlSettingsDialog from './CrawlSettingsDialog';
 import CrawlLatestDialog from './CrawlLatestDialog';
+import ModeTip from './ModeTip';
 
 interface CrawlPanelProps {
   onStatsUpdate: () => void;
@@ -20,8 +19,7 @@ interface CrawlPanelProps {
 
 export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelProps) {
   const [loading, setLoading] = useState<string | null>(null);
-  const [historicalPages, setHistoricalPages] = useState(10);
-  const [historicalPerPage, setHistoricalPerPage] = useState(20);
+  const [localGroupStats, setLocalGroupStats] = useState<GroupStats | null>(null);
 
   // 添加组件实例标识
   const instanceId = Math.random().toString(36).substr(2, 9);
@@ -38,23 +36,53 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
   const [longSleepIntervalMin, setLongSleepIntervalMin] = useState<number>(180);
   const [longSleepIntervalMax, setLongSleepIntervalMax] = useState<number>(300);
 
-  const handleCrawlHistorical = async () => {
+  const refreshLocalGroupStats = async () => {
     if (!selectedGroup) {
-      toast.error('请先选择一个群组');
+      setLocalGroupStats(null);
+      return;
+    }
+    try {
+      const stats = await apiClient.getGroupStats(selectedGroup.group_id);
+      setLocalGroupStats(stats);
+    } catch (error) {
+      console.warn('加载群组本地统计失败:', error);
+      setLocalGroupStats(null);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedGroup) {
+      setLocalGroupStats(null);
       return;
     }
 
-    try {
-      setLoading('historical');
-      const response = await apiClient.crawlHistorical(selectedGroup.group_id, historicalPages, historicalPerPage);
-      toast.success(`任务已创建: ${response.task_id}`);
-      onStatsUpdate();
-    } catch (error) {
-      toast.error(`创建任务失败: ${error instanceof Error ? error.message : '未知错误'}`);
-    } finally {
-      setLoading(null);
-    }
-  };
+    apiClient.getGroupStats(selectedGroup.group_id)
+      .then((stats) => {
+        if (!cancelled) {
+          setLocalGroupStats(stats);
+        }
+      })
+      .catch((error) => {
+        console.warn('加载群组本地统计失败:', error);
+        if (!cancelled) {
+          setLocalGroupStats(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedGroup]);
+
+  const hasLocalTopics = (localGroupStats?.topics_count || 0) > 0;
+  const allModeTitle = hasLocalTopics ? '继续爬取历史' : '获取所有历史数据';
+  const allModeButtonText = hasLocalTopics ? '继续爬取' : '全量爬取';
+  const allModeConfirmTitle = hasLocalTopics ? '确认继续爬取' : '确认全量爬取';
+  const allModeConfirmText = hasLocalTopics
+    ? '当前群组已有本地数据，将从数据库中最老话题时间继续向更早历史爬取，直到没有更多数据。'
+    : '当前群组暂无本地话题数据，将从最新话题开始持续向历史爬取，直到没有更多数据。';
 
   const handleCrawlAll = async () => {
     if (!selectedGroup) {
@@ -86,6 +114,9 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
       const response = await apiClient.crawlAll(selectedGroup.group_id, crawlSettings);
       toast.success(`任务已创建: ${response.task_id}`);
       onStatsUpdate();
+      setTimeout(() => {
+        refreshLocalGroupStats();
+      }, 2000);
     } catch (error) {
       toast.error(`创建任务失败: ${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
@@ -117,7 +148,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
         pagesPerBatch: Math.max(pagesPerBatch, 5),
       };
 
-      let response: any;
+      let response: TaskCreateResponse;
 
       if (params.mode === 'latest') {
         response = await apiClient.crawlLatestUntilComplete(selectedGroup.group_id, crawlSettings);
@@ -180,9 +211,10 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
 
     try {
       setLoading('clear');
-      const response = await apiClient.clearTopicDatabase(selectedGroup.group_id);
+      await apiClient.clearTopicDatabase(selectedGroup.group_id);
       toast.success('话题数据库已清除');
       onStatsUpdate();
+      await refreshLocalGroupStats();
     } catch (error) {
       toast.error(`清除数据库失败: ${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
@@ -211,8 +243,15 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {/* 获取最新话题 */}
-      <Card>
-        <CardHeader>
+      <Card className="relative">
+        <ModeTip>
+          <div className="space-y-1">
+            <p className="font-medium text-gray-900">获取最新话题</p>
+            <p>从最新话题开始抓取；如果本地已有数据，会向后抓到与本地数据衔接为止。</p>
+            <p>也可以在弹窗中选择最近 N 天或自定义时间范围。</p>
+          </div>
+        </ModeTip>
+        <CardHeader className="pr-10">
           <CardTitle className="flex items-center gap-2">
             <Badge variant="secondary">🆕</Badge>
             获取最新话题
@@ -223,7 +262,7 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-sm text-muted-foreground space-y-2">
-            <p>✅ 默认：直接从最新话题开始增量抓取</p>
+            <p>✅ 默认：直接从最新话题开始同步新内容</p>
             <p>🕒 可选：按时间区间采集（首次也可用）</p>
           </div>
           <Button
@@ -235,72 +274,34 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
           </Button>
         </CardContent>
       </Card>
-      {/* 增量爬取历史 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Badge variant="secondary">📚</Badge>
-            增量爬取历史
-          </CardTitle>
-          <CardDescription>
-            基于数据库最老时间戳，精确补充历史数据
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-2">
-              <Label htmlFor="historical-pages">爬取页数</Label>
-              <Input
-                id="historical-pages"
-                type="number"
-                value={historicalPages}
-                onChange={(e) => setHistoricalPages(Number(e.target.value))}
-                min={1}
-                max={1000}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="historical-per-page">每页数量</Label>
-              <Input
-                id="historical-per-page"
-                type="number"
-                value={historicalPerPage}
-                onChange={(e) => setHistoricalPerPage(Number(e.target.value))}
-                min={1}
-                max={100}
-              />
-            </div>
-          </div>
-          <Button
-            onClick={handleCrawlHistorical}
-            disabled={loading === 'historical'}
-            className="w-full"
-          >
-            {loading === 'historical' ? '创建任务中...' : '开始爬取'}
-          </Button>
-          <div className="text-xs text-muted-foreground">
-            <p>✅ 适合：精确补充历史，有目标的回填</p>
-            <p>📊 总计爬取: {historicalPages * historicalPerPage} 条记录</p>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* 获取所有历史数据 */}
-      <Card>
-        <CardHeader>
+      <Card className="relative">
+        <ModeTip>
+          <div className="space-y-1">
+            <p className="font-medium text-gray-900">{allModeTitle}</p>
+            <p>无本地数据时：从最新话题开始做完整归档。</p>
+            <p>已有本地数据时：从数据库最老话题时间继续向历史爬，不会清空重爬。</p>
+            <p>任务会一直运行到没有更多历史数据。</p>
+          </div>
+        </ModeTip>
+        <CardHeader className="pr-10">
           <CardTitle className="flex items-center gap-2">
             <Badge variant="secondary">🔄</Badge>
-            获取所有历史数据
+            {allModeTitle}
+            {!hasLocalTopics && (
+              <Badge variant="secondary" className="text-xs">推荐</Badge>
+            )}
           </CardTitle>
           <CardDescription>
-            无限爬取，从最老数据无限挖掘
+            {hasLocalTopics ? '从本地最老话题继续向历史爬取' : '首次采集推荐使用，完整收集历史数据'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-sm text-muted-foreground space-y-2">
             <p>⚠️ 这是一个长时间运行的任务</p>
-            <p>🔄 将持续爬取直到没有更多历史数据</p>
-            <p>📈 适合：全量归档，完整数据收集</p>
+            <p>{hasLocalTopics ? '🔄 已有本地数据，将从最老话题继续向前爬' : '📈 暂无本地数据，推荐用此模式做首次全量归档'}</p>
+            <p>✅ 将持续爬取直到没有更多历史数据</p>
           </div>
           
           <AlertDialog>
@@ -310,14 +311,15 @@ export default function CrawlPanel({ onStatsUpdate, selectedGroup }: CrawlPanelP
                 disabled={loading === 'all'}
                 className="w-full"
               >
-                {loading === 'all' ? '创建任务中...' : '开始全量爬取'}
+                {loading === 'all' ? '创建任务中...' : allModeButtonText}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>确认全量爬取</AlertDialogTitle>
+                <AlertDialogTitle>{allModeConfirmTitle}</AlertDialogTitle>
                 <AlertDialogDescription>
-                  这将开始一个长时间运行的任务，持续爬取所有历史数据直到完成。
+                  {allModeConfirmText}
+                  <br />
                   任务可能需要数小时甚至更长时间，确定要继续吗？
                 </AlertDialogDescription>
               </AlertDialogHeader>
