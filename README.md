@@ -3,8 +3,11 @@
   <h1>知识星球数据采集器</h1>
   <p>知识星球内容爬取与文件下载工具，支持话题采集、文件批量下载等功能</p>
   <p>如需定制功能，请联系 QQ：2977094657</p>
-  
-  [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Windows | Linux | macOS-lightgrey.svg)]()
+  <p>
+    <a href="https://qun.qq.com/universal-share/share?ac=1&amp;authKey=Yw16I2kCy6Z7qgJablWKtBhG%2BnEtijbbRGcFeBsCbxf8cW4fieCflIkmeIxsN0CZ&amp;busi_data=eyJncm91cENvZGUiOiIxMDk3NDMxMjIyIiwidG9rZW4iOiJHbWtaV3krcEo1STdrYUR0eFpKcklrQjU0UHhqQnA4MTh0YVoyWjhsRUJZN3BvUTFydEVFN3BFWTVXcmgxSjN1IiwidWluIjoiMjk3NzA5NDY1NyJ9&amp;data=GUL6QuPXl4jJpZxgKNjmkTk1QHsB-DG1KKiUwrDiYJ3bkS7EFbU1PDiRKxtmwWix4y1m3CGc6mfVr7_h5lrfjw&amp;svctype=4&amp;tempid=h5_group_info" title="点击链接加入群聊【ZsxqCrawler】">
+      <img src="https://img.shields.io/badge/QQ-ZsxqCrawler%201097431222-12B7F5?logo=tencentqq&amp;logoColor=white" alt="QQ 群">
+    </a>
+  </p>
   
   <img src="images/info.png" alt="群组详情页面" height="400">
 </div>
@@ -39,6 +42,17 @@
 <div align="center">
   <img src="images/import.png" alt="导入数据包页面" height="400">
   <p><em>导入数据包 - 导出信息预览、社群列表和冲突检查</em></p>
+</div>
+
+## QQ 交流群
+
+如果你在安装部署、Cookie 配置、数据采集、文件下载、导入导出等使用过程中遇到问题，欢迎扫码或点击下方二维码图片加入 QQ 交流群；也欢迎反馈 Bug、提交功能建议，方便后续持续优化项目。
+
+<div align="center">
+  <a href="https://qun.qq.com/universal-share/share?ac=1&amp;authKey=Yw16I2kCy6Z7qgJablWKtBhG%2BnEtijbbRGcFeBsCbxf8cW4fieCflIkmeIxsN0CZ&amp;busi_data=eyJncm91cENvZGUiOiIxMDk3NDMxMjIyIiwidG9rZW4iOiJHbWtaV3krcEo1STdrYUR0eFpKcklrQjU0UHhqQnA4MTh0YVoyWjhsRUJZN3BvUTFydEVFN3BFWTVXcmgxSjN1IiwidWluIjoiMjk3NzA5NDY1NyJ9&amp;data=GUL6QuPXl4jJpZxgKNjmkTk1QHsB-DG1KKiUwrDiYJ3bkS7EFbU1PDiRKxtmwWix4y1m3CGc6mfVr7_h5lrfjw&amp;svctype=4&amp;tempid=h5_group_info" title="点击链接加入群聊【ZsxqCrawler】">
+    <img src="QQ.jpg" alt="点击链接加入群聊【ZsxqCrawler】" width="240">
+  </a>
+  <p><em>扫码或点击图片加入 QQ 交流群</em></p>
 </div>
 
 ## 快速开始
@@ -120,6 +134,29 @@ uv run -m backend.zsxq_interactive_crawler
   - 例如当前示例配置中，群组 `88851415151812` 的文件路径为：`output/databases/88851415151812/downloads/`。
 - **图片缓存（可安全删除）**: `output/databases/{group_id}/images/`  
   - 用于话题图片预览的本地缓存，如被删除，后续访问时会自动重新生成。
+
+## 日志与排障
+
+后端已统一使用 Loguru 管理日志，并接管 `print`、标准 `logging`、FastAPI / Uvicorn 访问日志和后台任务日志。默认日志目录：
+
+```text
+output/logs/{year}/{month}/{day}/
+├── app.log              # INFO 及以上业务日志
+├── debug.log            # DEBUG 及以上完整诊断日志
+├── error.log            # ERROR 及以上错误和堆栈
+└── tasks/{task_id}.log  # 单个后台任务日志
+```
+
+常用环境变量：
+
+- `ZSXQ_LOG_DIR`: 日志根目录，默认 `output/logs`。
+- `ZSXQ_LOG_LEVEL`: 文件日志级别，默认 `DEBUG`。
+- `ZSXQ_CONSOLE_LOG_LEVEL`: 控制台日志级别，默认 `INFO`。
+- `ZSXQ_LOG_RETENTION`: 日志保留时间，默认 `30 days`。
+- `ZSXQ_LOG_ROTATION`: 日志轮转时间，默认 `00:00`。
+- `ZSXQ_CAPTURE_PRINT`: 是否捕获历史 `print` 输出，默认 `1`。
+
+排查长时间运行无输出的问题时，优先查看当天的 `debug.log` 和对应的 `tasks/{task_id}.log`。
 
 
 ## 项目结构
