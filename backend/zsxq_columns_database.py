@@ -6,8 +6,86 @@
 """
 
 import sqlite3
+import re
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from urllib.parse import unquote
+
+
+_ZSXQ_TAG_TITLE_RE = re.compile(r'<e\b[^>]*\btitle="([^"]*)"[^>]*\/?>')
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+_WHITESPACE_RE = re.compile(r'[ \t\r\f\v]+')
+
+
+def _decode_zsxq_title(value: str) -> str:
+    """解码知识星球标签中的 title 字段。"""
+    try:
+        return unquote(value or "")
+    except Exception:
+        return value or ""
+
+
+def _plain_text_from_zsxq_text(text: Optional[str]) -> str:
+    """把知识星球正文片段转换为可用于标题兜底的纯文本。"""
+    if not text:
+        return ""
+
+    def replace_tag(match: re.Match) -> str:
+        return _decode_zsxq_title(match.group(1))
+
+    plain = _ZSXQ_TAG_TITLE_RE.sub(replace_tag, str(text))
+    plain = _HTML_TAG_RE.sub("", plain)
+    plain = (
+        plain.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+    )
+    plain = "\n".join(_WHITESPACE_RE.sub(" ", line).strip() for line in plain.splitlines())
+    return "\n".join(line for line in plain.splitlines() if line).strip()
+
+
+def _short_title_from_text(text: Optional[str], max_length: int = 32) -> str:
+    """从正文第一段生成短标题，避免前端显示“无标题”。"""
+    plain = _plain_text_from_zsxq_text(text)
+    if not plain:
+        return ""
+    first_line = plain.splitlines()[0].strip()
+    if len(first_line) <= max_length:
+        return first_line
+    return f"{first_line[:max_length].rstrip()}..."
+
+
+def derive_topic_title(topic_data: Dict[str, Any]) -> str:
+    """根据不同接口返回结构推导话题标题。"""
+    if not isinstance(topic_data, dict):
+        return ""
+
+    talk = topic_data.get("talk") or {}
+    article = topic_data.get("article") or (talk.get("article") if isinstance(talk, dict) else {}) or {}
+    ai_content = topic_data.get("ai_content") or {}
+
+    # 优先使用服务端明确给出的标题，其次使用文章卡片或 AI 摘要标题。
+    for candidate in (
+        topic_data.get("title"),
+        article.get("title") if isinstance(article, dict) else None,
+        ai_content.get("title") if isinstance(ai_content, dict) else None,
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    # 部分 talk 类型在专栏列表中没有 title，但会带 text。
+    for text_candidate in (
+        topic_data.get("text"),
+        talk.get("text") if isinstance(talk, dict) else None,
+        (topic_data.get("question") or {}).get("text") if isinstance(topic_data.get("question"), dict) else None,
+        (topic_data.get("answer") or {}).get("text") if isinstance(topic_data.get("answer"), dict) else None,
+    ):
+        fallback = _short_title_from_text(text_candidate)
+        if fallback:
+            return fallback
+
+    return ""
 
 
 class ZSXQColumnsDatabase:
@@ -297,6 +375,8 @@ class ZSXQColumnsDatabase:
         """插入或更新专栏文章列表项"""
         if not topic_data or not topic_data.get('topic_id'):
             return None
+
+        title = derive_topic_title(topic_data)
         
         self.cursor.execute('''
             INSERT OR REPLACE INTO column_topics 
@@ -306,7 +386,7 @@ class ZSXQColumnsDatabase:
             topic_data.get('topic_id'),
             column_id,
             group_id,
-            topic_data.get('title'),
+            title or topic_data.get('title'),
             topic_data.get('text'),
             topic_data.get('create_time'),
             topic_data.get('attached_to_column_time')
@@ -319,6 +399,7 @@ class ZSXQColumnsDatabase:
         self.cursor.execute('''
             SELECT ct.topic_id, ct.column_id, ct.group_id, ct.title, ct.text, 
                    ct.create_time, ct.attached_to_column_time, ct.imported_at,
+                   td.title as detail_title,
                    CASE WHEN td.topic_id IS NOT NULL THEN 1 ELSE 0 END as has_detail
             FROM column_topics ct
             LEFT JOIN topic_details td ON ct.topic_id = td.topic_id
@@ -328,16 +409,17 @@ class ZSXQColumnsDatabase:
         
         topics = []
         for row in self.cursor.fetchall():
+            title = row[3] or row[8] or _short_title_from_text(row[4])
             topics.append({
                 'topic_id': row[0],
                 'column_id': row[1],
                 'group_id': row[2],
-                'title': row[3],
+                'title': title,
                 'text': row[4],
                 'create_time': row[5],
                 'attached_to_column_time': row[6],
                 'imported_at': row[7],
-                'has_detail': bool(row[8])
+                'has_detail': bool(row[9])
             })
         return topics
     
@@ -370,8 +452,15 @@ class ZSXQColumnsDatabase:
         topic_id = topic_data.get('topic_id')
         
         # 获取文本内容
-        talk = topic_data.get('talk', {})
+        talk = topic_data.get('talk') or {}
+        if not isinstance(talk, dict):
+            talk = {}
+        question = topic_data.get('question', {}) if isinstance(topic_data.get('question'), dict) else {}
+        answer = topic_data.get('answer', {}) if isinstance(topic_data.get('answer'), dict) else {}
         full_text = talk.get('text', '')
+        if not full_text:
+            full_text = answer.get('text') or question.get('text') or ''
+        title = derive_topic_title(topic_data)
         
         self.cursor.execute('''
             INSERT OR REPLACE INTO topic_details 
@@ -382,7 +471,7 @@ class ZSXQColumnsDatabase:
             topic_id,
             group_id,
             topic_data.get('type'),
-            topic_data.get('title'),
+            title or topic_data.get('title'),
             full_text,
             topic_data.get('likes_count', 0),
             topic_data.get('comments_count', 0),
@@ -393,6 +482,15 @@ class ZSXQColumnsDatabase:
             topic_data.get('modify_time'),
             raw_json
         ))
+
+        # 详情接口通常包含更完整的标题，回填专栏列表历史空标题数据。
+        if title or full_text:
+            self.cursor.execute('''
+                UPDATE column_topics
+                SET title = COALESCE(NULLIF(title, ''), ?),
+                    text = COALESCE(NULLIF(text, ''), ?)
+                WHERE topic_id = ?
+            ''', (title or None, full_text or None, topic_id))
         
         # 处理作者信息
         if talk and talk.get('owner'):
