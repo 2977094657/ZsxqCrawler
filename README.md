@@ -19,6 +19,7 @@
 - **导入导出**: 支持单社群或全部数据打包备份、导入预览、冲突检查与离线浏览
 - **命令行界面**: 提供交互式命令行工具
 - **Web 界面**: 现代化的 React 前端界面，操作直观
+- **实时反馈**: 专栏采集过程中目录与文章列表会自动刷新，首页社群卡片显示本地存储占用
 
 ## 界面展示
 
@@ -46,7 +47,7 @@
 
 ## QQ 交流群
 
-如果你在安装部署、Cookie 配置、数据采集、文件下载、导入导出等使用过程中遇到问题，欢迎扫码或点击下方二维码图片加入 QQ 交流群；也欢迎反馈 Bug、提交功能建议，方便后续持续优化项目。
+欢迎扫码或点击图片加入 QQ 交流群，交流使用经验、互换星球、反馈问题与建议。
 
 <div align="center">
   <a href="https://qun.qq.com/universal-share/share?ac=1&amp;authKey=Yw16I2kCy6Z7qgJablWKtBhG%2BnEtijbbRGcFeBsCbxf8cW4fieCflIkmeIxsN0CZ&amp;busi_data=eyJncm91cENvZGUiOiIxMDk3NDMxMjIyIiwidG9rZW4iOiJHbWtaV3krcEo1STdrYUR0eFpKcklrQjU0UHhqQnA4MTh0YVoyWjhsRUJZN3BvUTFydEVFN3BFWTVXcmgxSjN1IiwidWluIjoiMjk3NzA5NDY1NyJ9&amp;data=GUL6QuPXl4jJpZxgKNjmkTk1QHsB-DG1KKiUwrDiYJ3bkS7EFbU1PDiRKxtmwWix4y1m3CGc6mfVr7_h5lrfjw&amp;svctype=4&amp;tempid=h5_group_info" title="点击链接加入群聊【ZsxqCrawler】">
