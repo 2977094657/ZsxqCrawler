@@ -59,6 +59,12 @@ from .logger_config import (
     log_task_event,
     log_warning,
 )
+from .zsxq_retry import (
+    GLOBAL_API_MAX_RETRIES,
+    is_global_retry_code,
+    retry_wait_seconds,
+    should_retry_api_code,
+)
 from .zsxq_markdown_exporter import (
     article_html_to_markdown,
     column_topic_detail_to_markdown,
@@ -5432,7 +5438,7 @@ async def _fetch_columns_task(task_id: str, group_id: str, settings: ColumnsSett
         # 1. 获取专栏目录列表（带重试机制）
         add_task_log(task_id, "📂 获取专栏目录列表...")
         columns_url = f"https://api.zsxq.com/v2/groups/{group_id}/columns"
-        max_retries = 10
+        max_retries = GLOBAL_API_MAX_RETRIES
         columns = None
         
         for retry in range(max_retries):
@@ -5474,16 +5480,15 @@ async def _fetch_columns_task(task_id: str, group_id: str, settings: ColumnsSett
                 if 'expired' in error_msg.lower() or data.get('resp_data', {}).get('expired'):
                     raise Exception(f"会员已过期: {error_msg}")
                 
-                # 检查是否是反爬错误码 1059，需要重试
-                if error_code == 1059:
-                    if retry < max_retries - 1:
-                        wait_time = 2 if retry < 3 else (5 if retry < 6 else 10)
-                        add_task_log(task_id, f"   ⚠️ 遇到反爬机制 (错误码1059)，等待{wait_time}秒后重试 ({retry+1}/{max_retries})")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        log_error(f"获取专栏目录重试{max_retries}次后仍失败: group_id={group_id}, code={error_code}")
-                        raise Exception(f"获取专栏目录失败，重试{max_retries}次后仍遇到反爬限制")
+                if should_retry_api_code(error_code, retry, max_retries):
+                    wait_time = retry_wait_seconds(retry)
+                    add_task_log(task_id, f"   ⚠️ 命中全局重试错误码 {error_code}，等待{wait_time}秒后重试 ({retry+1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                if is_global_retry_code(error_code):
+                    log_error(f"获取专栏目录重试{max_retries}次后仍失败: group_id={group_id}, code={error_code}")
+                    raise Exception(f"获取专栏目录失败，重试{max_retries}次后仍遇到反爬限制")
                 else:
                     log_error(f"获取专栏目录API失败: group_id={group_id}, code={error_code}, message={error_msg}, response={json.dumps(data, ensure_ascii=False)[:500]}")
                     raise Exception(f"API返回失败: {error_msg} (code={error_code})")
@@ -5533,34 +5538,76 @@ async def _fetch_columns_task(task_id: str, group_id: str, settings: ColumnsSett
             
             # 获取专栏文章列表
             topics_url = f"https://api.zsxq.com/v2/groups/{group_id}/columns/{column_id}/topics?count=100&sort=default&direction=desc"
-            try:
-                topics_resp = requests.get(topics_url, headers=headers, timeout=30)
-                request_count += 1
-            except Exception as req_err:
-                log_exception(f"获取专栏文章列表请求异常: column_id={column_id}, url={topics_url}")
-                add_task_log(task_id, f"   ⚠️ 获取文章列表请求异常: {req_err}")
+            topics_list = None
+            max_topic_list_retries = GLOBAL_API_MAX_RETRIES
+            for retry in range(max_topic_list_retries):
+                if is_task_stopped(task_id):
+                    break
+
+                if retry > 0:
+                    add_task_log(task_id, f"   🔄 重试获取文章列表 ({retry+1}/{max_topic_list_retries})")
+
+                try:
+                    topics_resp = requests.get(topics_url, headers=headers, timeout=30)
+                    request_count += 1
+                except Exception as req_err:
+                    log_exception(f"获取专栏文章列表请求异常: column_id={column_id}, url={topics_url}")
+                    if retry < max_topic_list_retries - 1:
+                        wait_time = 2 if retry < 3 else (5 if retry < 6 else 10)
+                        add_task_log(task_id, f"   ⚠️ 请求异常，等待{wait_time}秒后重试 ({retry+1}/{max_topic_list_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    add_task_log(task_id, f"   ⚠️ 获取文章列表请求异常: {req_err}")
+                    break
+
+                if topics_resp.status_code != 200:
+                    log_error(f"获取专栏文章列表失败: column_id={column_id}, HTTP {topics_resp.status_code}, response={topics_resp.text[:500] if topics_resp.text else 'empty'}")
+                    if retry < max_topic_list_retries - 1:
+                        wait_time = 2 if retry < 3 else (5 if retry < 6 else 10)
+                        add_task_log(task_id, f"   ⚠️ HTTP {topics_resp.status_code}，等待{wait_time}秒后重试 ({retry+1}/{max_topic_list_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    add_task_log(task_id, f"   ⚠️ 获取文章列表失败: HTTP {topics_resp.status_code}")
+                    break
+
+                try:
+                    topics_data = topics_resp.json()
+                except Exception as json_err:
+                    log_exception(f"解析专栏文章列表JSON失败: column_id={column_id}, response={topics_resp.text[:500] if topics_resp.text else 'empty'}")
+                    if retry < max_topic_list_retries - 1:
+                        wait_time = 2 if retry < 3 else (5 if retry < 6 else 10)
+                        add_task_log(task_id, f"   ⚠️ 解析文章列表失败，等待{wait_time}秒后重试 ({retry+1}/{max_topic_list_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    add_task_log(task_id, f"   ⚠️ 解析文章列表失败: {json_err}")
+                    break
+
+                if not topics_data.get('succeeded'):
+                    error_code = topics_data.get('code', 'unknown')
+                    error_message = topics_data.get('error_message', '未知错误')
+
+                    if should_retry_api_code(error_code, retry, max_topic_list_retries):
+                        wait_time = retry_wait_seconds(retry)
+                        add_task_log(task_id, f"   ⚠️ 命中全局重试错误码 {error_code}，等待{wait_time}秒后重试 ({retry+1}/{max_topic_list_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                    if is_global_retry_code(error_code):
+                        log_error(f"获取专栏文章列表重试{max_topic_list_retries}次后仍失败: column_id={column_id}, code={error_code}, message={error_message}")
+                        add_task_log(task_id, f"   ❌ 文章列表重试{max_topic_list_retries}次后仍失败: {error_message} (code={error_code})")
+                        break
+
+                    log_error(f"获取专栏文章列表失败: column_id={column_id}, code={error_code}, message={error_message}")
+                    add_task_log(task_id, f"   ⚠️ 获取文章列表失败: {error_message} (code={error_code})")
+                    break
+
+                topics_list = topics_data.get('resp_data', {}).get('topics', [])
+                if retry > 0:
+                    add_task_log(task_id, f"   ✅ 文章列表重试成功 (第{retry+1}次尝试)")
+                break
+
+            if topics_list is None:
                 continue
-            
-            if topics_resp.status_code != 200:
-                log_error(f"获取专栏文章列表失败: column_id={column_id}, HTTP {topics_resp.status_code}, response={topics_resp.text[:500] if topics_resp.text else 'empty'}")
-                add_task_log(task_id, f"   ⚠️ 获取文章列表失败: HTTP {topics_resp.status_code}")
-                continue
-            
-            try:
-                topics_data = topics_resp.json()
-            except Exception as json_err:
-                log_exception(f"解析专栏文章列表JSON失败: column_id={column_id}, response={topics_resp.text[:500] if topics_resp.text else 'empty'}")
-                add_task_log(task_id, f"   ⚠️ 解析文章列表失败: {json_err}")
-                continue
-                
-            if not topics_data.get('succeeded'):
-                error_code = topics_data.get('code', 'unknown')
-                error_message = topics_data.get('error_message', '未知错误')
-                log_error(f"获取专栏文章列表失败: column_id={column_id}, code={error_code}, message={error_message}")
-                add_task_log(task_id, f"   ⚠️ 获取文章列表失败: {error_message} (code={error_code})")
-                continue
-            
-            topics_list = topics_data.get('resp_data', {}).get('topics', [])
             add_task_log(task_id, f"   📝 获取到 {len(topics_list)} 篇文章")
             
             # 3. 遍历每篇文章
@@ -5582,7 +5629,7 @@ async def _fetch_columns_task(task_id: str, group_id: str, settings: ColumnsSett
                 add_task_log(task_id, f"   📄 [{topic_idx}/{len(topics_list)}] {topic_title}...")
                 
                 # 获取文章详情（带重试机制）
-                max_retries = 10
+                max_retries = GLOBAL_API_MAX_RETRIES
                 topic_detail = None
                 
                 for retry in range(max_retries):
@@ -5625,24 +5672,16 @@ async def _fetch_columns_task(task_id: str, group_id: str, settings: ColumnsSett
                         error_code = detail_data.get('code')
                         error_message = detail_data.get('error_message', '未知错误')
                         
-                        # 检查是否是反爬错误码 1059，需要重试
-                        if error_code == 1059:
-                            if retry < max_retries - 1:
-                                # 智能等待时间策略：前几次短等待，后面逐渐增加
-                                if retry < 3:
-                                    wait_time = 2  # 前3次等待2秒
-                                elif retry < 6:
-                                    wait_time = 5  # 第4-6次等待5秒
-                                else:
-                                    wait_time = 10  # 第7-10次等待10秒
-                                
-                                add_task_log(task_id, f"      ⚠️ 遇到反爬机制 (错误码1059)，等待{wait_time}秒后重试 ({retry+1}/{max_retries})")
-                                await asyncio.sleep(wait_time)
-                                continue
-                            else:
-                                log_error(f"获取文章详情重试{max_retries}次后仍失败: topic_id={topic_id}, code={error_code}, message={error_message}")
-                                add_task_log(task_id, f"      ❌ 重试{max_retries}次后仍失败: {error_message} (code={error_code})")
-                                break
+                        if should_retry_api_code(error_code, retry, max_retries):
+                            wait_time = retry_wait_seconds(retry)
+                            add_task_log(task_id, f"      ⚠️ 命中全局重试错误码 {error_code}，等待{wait_time}秒后重试 ({retry+1}/{max_retries})")
+                            await asyncio.sleep(wait_time)
+                            continue
+
+                        if is_global_retry_code(error_code):
+                            log_error(f"获取文章详情重试{max_retries}次后仍失败: topic_id={topic_id}, code={error_code}, message={error_message}")
+                            add_task_log(task_id, f"      ❌ 重试{max_retries}次后仍失败: {error_message} (code={error_code})")
+                            break
                         else:
                             log_error(f"获取文章详情失败: topic_id={topic_id}, code={error_code}, message={error_message}, full_response={json.dumps(detail_data, ensure_ascii=False)[:500]}")
                             add_task_log(task_id, f"      ⚠️ 获取详情失败: {error_message} (code={error_code})")
@@ -5851,7 +5890,7 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
     
     # 获取下载URL（带重试机制）
     download_url = f"https://api.zsxq.com/v2/files/{file_id}/download_url"
-    max_retries = 10
+    max_retries = GLOBAL_API_MAX_RETRIES
     real_url = None
     
     for retry in range(max_retries):
@@ -5879,15 +5918,14 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
             error_code = data.get('code')
             error_message = data.get('error_message', '未知错误')
             
-            # 检查是否是反爬错误码 1059，需要重试
-            if error_code == 1059:
-                if retry < max_retries - 1:
-                    wait_time = 2 if retry < 3 else (5 if retry < 6 else 10)
-                    await asyncio.sleep(wait_time)
-                    continue
-                else:
-                    log_error(f"获取下载链接重试{max_retries}次后仍失败: file_id={file_id}, code={error_code}")
-                    raise Exception(f"获取下载链接失败，重试{max_retries}次后仍遇到反爬限制")
+            if should_retry_api_code(error_code, retry, max_retries):
+                wait_time = retry_wait_seconds(retry)
+                await asyncio.sleep(wait_time)
+                continue
+
+            if is_global_retry_code(error_code):
+                log_error(f"获取下载链接重试{max_retries}次后仍失败: file_id={file_id}, code={error_code}")
+                raise Exception(f"获取下载链接失败，重试{max_retries}次后仍遇到反爬限制")
             else:
                 error_msg = f"获取下载链接失败: code={error_code}, message={error_message}, file_id={file_id}, file_name={file_name}"
                 log_error(error_msg)
@@ -5969,7 +6007,7 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
     
     # 获取视频URL（带重试机制）
     video_url_api = f"https://api.zsxq.com/v2/videos/{video_id}/url"
-    max_retries = 10
+    max_retries = GLOBAL_API_MAX_RETRIES
     m3u8_url = None
     
     for retry in range(max_retries):
@@ -5997,15 +6035,14 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
             error_code = data.get('code')
             error_message = data.get('error_message', '未知错误')
             
-            # 检查是否是反爬错误码 1059，需要重试
-            if error_code == 1059:
-                if retry < max_retries - 1:
-                    wait_time = 2 if retry < 3 else (5 if retry < 6 else 10)
-                    await asyncio.sleep(wait_time)
-                    continue
-                else:
-                    log_error(f"获取视频链接重试{max_retries}次后仍失败: video_id={video_id}, code={error_code}")
-                    raise Exception(f"获取视频链接失败，重试{max_retries}次后仍遇到反爬限制")
+            if should_retry_api_code(error_code, retry, max_retries):
+                wait_time = retry_wait_seconds(retry)
+                await asyncio.sleep(wait_time)
+                continue
+
+            if is_global_retry_code(error_code):
+                log_error(f"获取视频链接重试{max_retries}次后仍失败: video_id={video_id}, code={error_code}")
+                raise Exception(f"获取视频链接失败，重试{max_retries}次后仍遇到反爬限制")
             else:
                 error_msg = f"获取视频链接失败: code={error_code}, message={error_message}, video_id={video_id}, topic_id={topic_id}"
                 log_error(error_msg)

@@ -13,6 +13,12 @@ from .zsxq_database import ZSXQDatabase
 from .zsxq_file_downloader import ZSXQFileDownloader
 from .db_path_manager import get_db_path_manager
 from .logger_config import log_error, log_info, log_warning
+from .zsxq_retry import (
+    ensure_global_max_retries,
+    is_global_retry_code,
+    retry_wait_seconds,
+    should_retry_api_code,
+)
 import os
 import argparse
 try:
@@ -326,6 +332,7 @@ class ZSXQInteractiveCrawler:
 
     def fetch_comments_safe(self, topic_id: int, begin_time: str = None, count: int = 30, max_retries: int = 10) -> Optional[Dict[str, Any]]:
         """安全获取话题评论，包含重试机制处理反爬"""
+        max_retries = ensure_global_max_retries(max_retries)
         for retry in range(max_retries):
             try:
                 # 构建评论API URL
@@ -368,23 +375,15 @@ class ZSXQInteractiveCrawler:
                         error_code = data.get('code')
                         error_msg = data.get('error', '未知错误')
 
-                        # 检查是否是反爬错误码1059
-                        if error_code == 1059:
-                            if retry < max_retries - 1:
-                                # 智能等待时间策略：前几次短等待，后面逐渐增加
-                                if retry < 3:
-                                    wait_time = 2  # 前3次等待2秒
-                                elif retry < 6:
-                                    wait_time = 5  # 第4-6次等待5秒
-                                else:
-                                    wait_time = 10  # 第7-10次等待10秒
+                        if should_retry_api_code(error_code, retry, max_retries):
+                            wait_time = retry_wait_seconds(retry)
+                            self.log(f"⚠️ 命中全局重试错误码 {error_code}，等待{wait_time}秒后重试 (第{retry+1}/{max_retries}次)")
+                            time.sleep(wait_time)
+                            continue
 
-                                self.log(f"⚠️ 遇到反爬机制 (错误码1059)，等待{wait_time}秒后重试 (第{retry+1}/{max_retries}次)")
-                                time.sleep(wait_time)
-                                continue
-                            else:
-                                self.log(f"❌ 评论API重试{max_retries}次后仍失败: 错误码{error_code} - {error_msg}")
-                                return None
+                        if is_global_retry_code(error_code):
+                            self.log(f"❌ 评论API重试{max_retries}次后仍失败: 错误码{error_code} - {error_msg}")
+                            return None
                         else:
                             self.log(f"❌ 评论API返回失败: 错误码{error_code} - {error_msg}")
                             return None
@@ -397,14 +396,7 @@ class ZSXQInteractiveCrawler:
 
             except Exception as e:
                 if retry < max_retries - 1:
-                    # 使用与1059错误相同的等待策略
-                    if retry < 3:
-                        wait_time = 2
-                    elif retry < 6:
-                        wait_time = 5
-                    else:
-                        wait_time = 10
-
+                    wait_time = retry_wait_seconds(retry)
                     self.log(f"❌ 获取评论异常: {str(e)}，等待{wait_time}秒后重试 (第{retry+1}/{max_retries}次)")
                     time.sleep(wait_time)
                     continue
@@ -563,34 +555,39 @@ class ZSXQInteractiveCrawler:
             # 停止时不再打印日志，直接返回
             return None
 
-        try:
-            response = self.session.get(
-                url,
-                headers=headers,
-                params=params,
-                timeout=10,  # 降低超时时间以便快速响应停止信号
-                allow_redirects=True
-            )
-            
-            self.log(f"   📊 状态: {response.status_code}, 大小: {len(response.content)}B")
+        max_retries = ensure_global_max_retries()
+        for retry in range(max_retries):
+            try:
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                    timeout=10,  # 降低超时时间以便快速响应停止信号
+                    allow_redirects=True
+                )
 
-            # 请求完成后立即检查停止标志
-            if self.is_stopped():
-                return None
+                self.log(f"   📊 状态: {response.status_code}, 大小: {len(response.content)}B")
 
-            if response.status_code == 200:
-                try:
-                    # 在处理响应前检查停止标志
-                    if self.is_stopped():
-                        self.log("🛑 响应处理前检测到停止信号")
-                        return None
+                # 请求完成后立即检查停止标志
+                if self.is_stopped():
+                    return None
 
-                    data = response.json()
-                    if data.get('succeeded'):
-                        topics = data.get('resp_data', {}).get('topics', [])
-                        self.log(f"   ✅ 获取成功: {len(topics)}个话题")
-                        return data
-                    else:
+                if response.status_code == 200:
+                    try:
+                        # 在处理响应前检查停止标志
+                        if self.is_stopped():
+                            self.log("🛑 响应处理前检测到停止信号")
+                            return None
+
+                        data = response.json()
+                        if data.get('succeeded'):
+                            topics = data.get('resp_data', {}).get('topics', [])
+                            if retry > 0:
+                                self.log(f"   ✅ 全局重试成功: 第{retry+1}次尝试获取到 {len(topics)} 个话题")
+                            else:
+                                self.log(f"   ✅ 获取成功: {len(topics)}个话题")
+                            return data
+
                         error_code = data.get('code')
                         error_message = data.get('error', data.get('message', '未知错误'))
 
@@ -600,42 +597,53 @@ class ZSXQInteractiveCrawler:
                             self.log(f"   📋 完整响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
                             # 设置过期标志，让调用方知道这是过期错误
                             return {"expired": True, "code": error_code, "message": error_message}
+
+                        if should_retry_api_code(error_code, retry, max_retries):
+                            wait_time = retry_wait_seconds(retry)
+                            self.log(f"   ⚠️ 命中全局重试错误码 {error_code}，等待{wait_time}秒后重试 (第{retry+1}/{max_retries}次)")
+                            time.sleep(wait_time)
+                            continue
+
+                        if is_global_retry_code(error_code):
+                            self.log(f"   ❌ API重试{max_retries}次后仍失败: {error_message} (code={error_code})")
                         else:
                             self.log(f"   ❌ API失败: {error_message}")
-                            self.log(f"   📋 完整响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
-                            return None
-                except json.JSONDecodeError as e:
-                    self.log(f"   ❌ JSON解析失败: {e}")
-                    self.log(f"   📄 响应内容: {response.text[:500]}...")
+                        self.log(f"   📋 完整响应: {json.dumps(data, ensure_ascii=False, indent=2)}")
+                        return None
+                    except json.JSONDecodeError as e:
+                        self.log(f"   ❌ JSON解析失败: {e}")
+                        self.log(f"   📄 响应内容: {response.text[:500]}...")
+                        self.log(f"   📋 响应头: {dict(response.headers)}")
+                        return None
+                else:
+                    self.log(f"   ❌ HTTP错误: {response.status_code}")
+                    self.log(f"   📄 响应内容: {response.text}")
                     self.log(f"   📋 响应头: {dict(response.headers)}")
+                    if response.status_code == 429:
+                        self.log("   🚨 触发频率限制，建议增加延迟时间")
+                    elif response.status_code == 403:
+                        self.log("   🚨 访问被拒绝，可能需要更新Cookie或反检测策略")
+                    elif response.status_code == 401:
+                        self.log("   🚨 认证失败，请检查Cookie是否过期")
                     return None
-            else:
-                self.log(f"   ❌ HTTP错误: {response.status_code}")
-                self.log(f"   📄 响应内容: {response.text}")
-                self.log(f"   📋 响应头: {dict(response.headers)}")
-                if response.status_code == 429:
-                    self.log("   🚨 触发频率限制，建议增加延迟时间")
-                elif response.status_code == 403:
-                    self.log("   🚨 访问被拒绝，可能需要更新Cookie或反检测策略")
-                elif response.status_code == 401:
-                    self.log("   🚨 认证失败，请检查Cookie是否过期")
+
+            except requests.exceptions.Timeout as e:
+                self.log(f"   ❌ 请求超时: {e}")
+                self.log(f"   🔧 建议: 增加超时时间或检查网络连接")
                 return None
-                
-        except requests.exceptions.Timeout as e:
-            self.log(f"   ❌ 请求超时: {e}")
-            self.log(f"   🔧 建议: 增加超时时间或检查网络连接")
-            return None
-        except requests.exceptions.ConnectionError as e:
-            self.log(f"   ❌ 连接错误: {e}")
-            self.log(f"   🔧 建议: 检查网络连接或DNS设置")
-            return None
-        except requests.exceptions.HTTPError as e:
-            self.log(f"   ❌ HTTP协议错误: {e}")
-            return None
-        except requests.exceptions.RequestException as e:
-            self.log(f"   ❌ 请求异常: {e}")
-            self.log(f"   🔧 异常类型: {type(e).__name__}")
-            return None
+            except requests.exceptions.ConnectionError as e:
+                self.log(f"   ❌ 连接错误: {e}")
+                self.log(f"   🔧 建议: 检查网络连接或DNS设置")
+                return None
+            except requests.exceptions.HTTPError as e:
+                self.log(f"   ❌ HTTP协议错误: {e}")
+                return None
+            except requests.exceptions.RequestException as e:
+                self.log(f"   ❌ 请求异常: {e}")
+                self.log(f"   🔧 异常类型: {type(e).__name__}")
+                return None
+
+        return None
     
     def store_batch_data(self, data: Dict[str, Any]) -> Dict[str, int]:
         """批量存储数据到数据库"""
