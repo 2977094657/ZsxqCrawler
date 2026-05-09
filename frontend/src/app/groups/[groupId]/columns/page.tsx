@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
@@ -11,12 +10,11 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { 
   ArrowLeft, BookOpen, FileText, Download, RefreshCw, 
-  ChevronRight, File, FileImage, Clock, Heart, MessageCircle,
+  File, FileImage, Clock, Heart, MessageCircle,
   Users, FolderOpen, Play, Settings, Trash2, Loader2
 } from 'lucide-react';
 import { apiClient, ColumnInfo, ColumnTopic, ColumnTopicDetail, ColumnsStats, ColumnsFetchSettings } from '@/lib/api';
 import { toast } from 'sonner';
-import SafeImage from '@/components/SafeImage';
 import ImageGallery from '@/components/ImageGallery';
 import TaskLogViewer from '@/components/TaskLogViewer';
 import { createSafeHtml } from '@/lib/zsxq-content-renderer';
@@ -59,6 +57,18 @@ export default function ColumnsPage() {
   const [logPanelWidth, setLogPanelWidth] = useState(384); // 默认 w-96 = 384px
   const [isResizing, setIsResizing] = useState(false);
   const resizeRef = useRef<HTMLDivElement>(null);
+  const selectedColumnIdRef = useRef<number | null>(null);
+  const selectedTopicIdRef = useRef<number | null>(null);
+  const columnsRefreshInFlightRef = useRef(false);
+  const topicsRefreshInFlightRef = useRef(false);
+
+  useEffect(() => {
+    selectedColumnIdRef.current = selectedColumn?.column_id ?? null;
+  }, [selectedColumn]);
+
+  useEffect(() => {
+    selectedTopicIdRef.current = selectedTopic?.topic_id ?? null;
+  }, [selectedTopic]);
 
   // 处理拖拽调整宽度
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -97,60 +107,139 @@ export default function ColumnsPage() {
     };
   }, [isResizing]);
 
-  // 加载专栏目录
-  const loadColumns = async () => {
-    try {
-      setLoading(true);
-      const data = await apiClient.getGroupColumns(groupId);
-      setColumns(data.columns || []);
-      setStats(data.stats);
-      
-      // 如果有专栏，自动选择第一个
-      if (data.columns && data.columns.length > 0) {
-        setSelectedColumn(data.columns[0]);
-        await loadColumnTopics(data.columns[0].column_id);
-      }
-    } catch (error) {
-      console.error('加载专栏目录失败:', error);
-      toast.error('加载专栏目录失败');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 加载专栏文章列表
-  const loadColumnTopics = async (columnId: number) => {
-    try {
-      setTopicsLoading(true);
-      setSelectedTopic(null);
-      const data = await apiClient.getColumnTopics(groupId, columnId);
-      setColumnTopics(data.topics || []);
-      
-      // 如果有文章，自动选择第一个
-      if (data.topics && data.topics.length > 0 && data.topics[0].has_detail) {
-        await loadTopicDetail(data.topics[0].topic_id);
-      }
-    } catch (error) {
-      console.error('加载专栏文章列表失败:', error);
-      toast.error('加载文章列表失败');
-    } finally {
-      setTopicsLoading(false);
-    }
-  };
-
   // 加载文章详情
-  const loadTopicDetail = async (topicId: number) => {
+  const loadTopicDetail = useCallback(async (
+    topicId: number,
+    options: { silent?: boolean } = {}
+  ) => {
+    const { silent = false } = options;
     try {
-      setDetailLoading(true);
+      if (!silent) {
+        setDetailLoading(true);
+      }
       const detail = await apiClient.getColumnTopicDetail(groupId, topicId);
       setSelectedTopic(detail);
     } catch (error) {
       console.error('加载文章详情失败:', error);
-      toast.error('加载文章详情失败');
+      if (!silent) {
+        toast.error('加载文章详情失败');
+      }
     } finally {
-      setDetailLoading(false);
+      if (!silent) {
+        setDetailLoading(false);
+      }
     }
-  };
+  }, [groupId]);
+
+  // 加载专栏文章列表。自动刷新时保留当前选中文章，避免列表刷新打断阅读。
+  const loadColumnTopics = useCallback(async (
+    columnId: number,
+    options: { silent?: boolean; preserveSelection?: boolean } = {}
+  ) => {
+    const { silent = false, preserveSelection = false } = options;
+
+    if (silent && topicsRefreshInFlightRef.current) {
+      return;
+    }
+
+    topicsRefreshInFlightRef.current = true;
+
+    try {
+      if (!silent) {
+        setTopicsLoading(true);
+      }
+      if (!preserveSelection) {
+        setSelectedTopic(null);
+      }
+
+      const data = await apiClient.getColumnTopics(groupId, columnId);
+      const nextTopics = data.topics || [];
+      setColumnTopics(nextTopics);
+
+      const currentTopicId = selectedTopicIdRef.current;
+      const stillSelected = currentTopicId
+        ? nextTopics.some((topic) => topic.topic_id === currentTopicId && topic.has_detail)
+        : false;
+
+      // 如果当前没有可展示的文章详情，则自然选中第一篇已采集详情的文章。
+      if (!stillSelected) {
+        const firstTopicWithDetail = nextTopics.find((topic) => topic.has_detail);
+        if (firstTopicWithDetail) {
+          await loadTopicDetail(firstTopicWithDetail.topic_id, { silent });
+        } else {
+          setSelectedTopic(null);
+        }
+      }
+    } catch (error) {
+      console.error('加载专栏文章列表失败:', error);
+      if (!silent) {
+        toast.error('加载文章列表失败');
+      }
+    } finally {
+      topicsRefreshInFlightRef.current = false;
+      if (!silent) {
+        setTopicsLoading(false);
+      }
+    }
+  }, [groupId, loadTopicDetail]);
+
+  // 加载专栏目录。自动刷新时静默更新左侧目录与中间文章列表。
+  const loadColumns = useCallback(async (
+    options: { silent?: boolean; preserveSelection?: boolean } = {}
+  ) => {
+    const { silent = false, preserveSelection = false } = options;
+
+    if (silent && columnsRefreshInFlightRef.current) {
+      return;
+    }
+
+    columnsRefreshInFlightRef.current = true;
+
+    try {
+      if (!silent) {
+        setLoading(true);
+      }
+
+      const data = await apiClient.getGroupColumns(groupId);
+      const nextColumns = data.columns || [];
+      setColumns(nextColumns);
+      setStats(data.stats);
+
+      if (nextColumns.length === 0) {
+        setSelectedColumn(null);
+        setColumnTopics([]);
+        setSelectedTopic(null);
+        return;
+      }
+
+      const currentColumnId = selectedColumnIdRef.current;
+      const preferredColumn = preserveSelection && currentColumnId
+        ? nextColumns.find((column) => column.column_id === currentColumnId)
+        : undefined;
+      const columnToLoad = preferredColumn || nextColumns[0];
+
+      setSelectedColumn((previous) => (
+        previous?.column_id === columnToLoad.column_id
+          ? { ...previous, ...columnToLoad }
+          : columnToLoad
+      ));
+
+      await loadColumnTopics(columnToLoad.column_id, {
+        silent,
+        preserveSelection: preserveSelection && Boolean(preferredColumn),
+      });
+    } catch (error) {
+      console.error('加载专栏目录失败:', error);
+      if (!silent) {
+        toast.error('加载专栏目录失败');
+      }
+    } finally {
+      columnsRefreshInFlightRef.current = false;
+      if (!silent) {
+        setLoading(false);
+      }
+    }
+  }, [groupId, loadColumnTopics]);
 
   // 获取完整评论
   const handleFetchMoreComments = async () => {
@@ -197,6 +286,9 @@ export default function ColumnsPage() {
       if (result.success) {
         setCurrentTaskId(result.task_id);
         toast.success(incrementalMode ? '增量采集任务已启动（跳过已存在）' : '全量采集任务已启动');
+      } else {
+        setFetchingColumns(false);
+        toast.error(result.message || '启动专栏采集失败');
       }
     } catch (error) {
       console.error('启动专栏采集失败:', error);
@@ -282,7 +374,51 @@ export default function ColumnsPage() {
 
   useEffect(() => {
     loadColumns();
-  }, [groupId]);
+  }, [loadColumns]);
+
+  useEffect(() => {
+    if (!fetchingColumns && !currentTaskId) {
+      return;
+    }
+
+    let stopped = false;
+
+    const refreshColumnsNaturally = async () => {
+      if (stopped || document.visibilityState !== 'visible') {
+        return;
+      }
+
+      await loadColumns({
+        silent: true,
+        preserveSelection: true,
+      });
+
+      if (currentTaskId) {
+        try {
+          const task = await apiClient.getTask(currentTaskId);
+          if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+            setFetchingColumns(false);
+            setCurrentTaskId(null);
+            await loadColumns({
+              silent: true,
+              preserveSelection: true,
+            });
+          }
+        } catch (error) {
+          console.warn('检查专栏采集任务状态失败:', error);
+        }
+      }
+    };
+
+    const firstRefreshTimer = window.setTimeout(refreshColumnsNaturally, 1000);
+    const intervalId = window.setInterval(refreshColumnsNaturally, 3000);
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(firstRefreshTimer);
+      window.clearInterval(intervalId);
+    };
+  }, [currentTaskId, fetchingColumns, loadColumns]);
 
   // 渲染导航栏内的紧凑统计信息
   const renderNavStats = () => {
@@ -486,7 +622,7 @@ export default function ColumnsPage() {
                   {selectedTopic.question.images && selectedTopic.question.images.length > 0 && (
                     <div className="mt-3">
                       <ImageGallery
-                        images={selectedTopic.question.images as any}
+                        images={selectedTopic.question.images}
                         size="small"
                         groupId={groupId}
                       />
@@ -506,7 +642,7 @@ export default function ColumnsPage() {
                   {selectedTopic.answer.images && selectedTopic.answer.images.length > 0 && (
                     <div className="mt-3">
                       <ImageGallery
-                        images={selectedTopic.answer.images as any}
+                        images={selectedTopic.answer.images}
                         size="small"
                         groupId={groupId}
                       />
@@ -761,7 +897,7 @@ export default function ColumnsPage() {
                     {comment.images && comment.images.length > 0 && (
                       <div className="ml-6 mt-2">
                         <ImageGallery
-                          images={comment.images as any}
+                          images={comment.images}
                           className="comment-images"
                           size="small"
                           groupId={groupId}
@@ -810,7 +946,7 @@ export default function ColumnsPage() {
                             {reply.images && reply.images.length > 0 && (
                               <div className="ml-5 mt-1">
                                 <ImageGallery
-                                  images={reply.images as any}
+                                  images={reply.images}
                                   className="reply-images"
                                   size="small"
                                   groupId={groupId}
@@ -867,10 +1003,16 @@ export default function ColumnsPage() {
           </div>
           
           <div className="flex items-center gap-3">
+            {(fetchingColumns || currentTaskId) && (
+              <Badge variant="outline" className="h-8 gap-1.5 text-amber-700 border-amber-200 bg-amber-50">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                自动刷新中
+              </Badge>
+            )}
             <Button
               variant="outline"
               size="sm"
-              onClick={loadColumns}
+              onClick={() => loadColumns()}
               className="flex items-center gap-2"
             >
               <RefreshCw className="h-4 w-4" />
@@ -1181,7 +1323,7 @@ export default function ColumnsPage() {
                   // 任务停止时清除任务ID，避免重复触发
                   setCurrentTaskId(null);
                   setFetchingColumns(false);
-                  loadColumns();
+                  loadColumns({ silent: true, preserveSelection: true });
                 }}
               />
             </div>

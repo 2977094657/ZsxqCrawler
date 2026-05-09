@@ -6,11 +6,18 @@ import Zoom from 'yet-another-react-lightbox/plugins/zoom';
 import Fullscreen from 'yet-another-react-lightbox/plugins/fullscreen';
 import { apiClient } from '@/lib/api';
 
+interface ImageVariant {
+  url?: string;
+  width?: number;
+  height?: number;
+  size?: number;
+}
+
 interface ImageData {
-  image_id: string;
-  original?: { url: string };
-  large?: { url: string };
-  thumbnail?: { url: string };
+  image_id?: string | number;
+  original?: ImageVariant;
+  large?: ImageVariant;
+  thumbnail?: ImageVariant;
 }
 
 interface ImageGalleryProps {
@@ -49,14 +56,6 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ images, className = '', siz
     );
   };
 
-  // 获取预览图URL，优先使用original，然后large
-  const getPreviewUrl = (image: ImageData) => {
-    return apiClient.getProxyImageUrl(
-      image.original?.url || image.large?.url || image.thumbnail?.url || '',
-      groupId
-    );
-  };
-
   // 根据size属性获取对应的样式类（固定缩略图盒子尺寸，避免加载时宽度抖动）
   const getSizeClasses = () => {
     switch (size) {
@@ -75,7 +74,7 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ images, className = '', siz
       {/* 缩略图网格 */}
       <div className="flex gap-2 overflow-x-auto pb-2 w-full">
         {images.map((image, index) => (
-          <div key={image.image_id} className={`relative flex-shrink-0 ${getSizeClasses()}`}>
+          <div key={image.image_id ?? index} className={`relative flex-shrink-0 ${getSizeClasses()}`}>
             <img
               src={getThumbnailUrl(image)}
               alt={`话题图片 ${index + 1}`}

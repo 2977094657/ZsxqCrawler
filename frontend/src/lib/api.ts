@@ -14,7 +14,7 @@ export interface ApiResponse<T = any> {
 export interface Task {
   task_id: string;
   type: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   message: string;
   result?: any;
   created_at: string;
