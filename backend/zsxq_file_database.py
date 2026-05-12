@@ -328,13 +328,16 @@ class ZSXQFileDatabase:
         """插入或更新文件信息"""
         if not file_data or not file_data.get('file_id'):
             return None
-            
+
+        file_id = file_data.get('file_id')
+
+        # 文件列表刷新只更新元数据，不覆盖已下载状态和本地路径。
         self.cursor.execute('''
-        INSERT OR REPLACE INTO files 
+        INSERT OR IGNORE INTO files
         (file_id, name, hash, size, duration, download_count, create_time)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
-            file_data.get('file_id'),
+            file_id,
             file_data.get('name', ''),
             file_data.get('hash'),
             file_data.get('size'),
@@ -342,7 +345,26 @@ class ZSXQFileDatabase:
             file_data.get('download_count'),
             file_data.get('create_time')
         ))
-        return file_data.get('file_id')
+
+        self.cursor.execute('''
+        UPDATE files
+        SET name = ?,
+            hash = ?,
+            size = ?,
+            duration = ?,
+            download_count = ?,
+            create_time = ?
+        WHERE file_id = ?
+        ''', (
+            file_data.get('name', ''),
+            file_data.get('hash'),
+            file_data.get('size'),
+            file_data.get('duration'),
+            file_data.get('download_count'),
+            file_data.get('create_time'),
+            file_id
+        ))
+        return file_id
     
     def insert_topic(self, topic_data: Dict[str, Any]) -> Optional[int]:
         """插入或更新话题信息"""
@@ -748,4 +770,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()

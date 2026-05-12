@@ -924,8 +924,9 @@ class ZSXQFileDownloader:
         self.log(f"   📊 数据库初始状态: {initial_files} 个文件")
 
         # 如果是按时间排序且非强制刷新模式，获取数据库中最新文件的时间戳
+        # 仅从最新页开始增量刷新时使用；从历史 index 续采时不能用最新时间拦截。
         db_latest_time = None
-        if sort == "by_create_time" and not force_refresh and initial_files > 0:
+        if sort == "by_create_time" and not force_refresh and initial_files > 0 and not start_time:
             self.file_db.cursor.execute('''
                 SELECT MAX(create_time) FROM files
                 WHERE create_time IS NOT NULL AND create_time != ''
@@ -934,6 +935,11 @@ class ZSXQFileDownloader:
             if result and result[0]:
                 db_latest_time = result[0]
                 self.log(f"   📅 数据库最新文件时间: {db_latest_time}")
+
+        existing_file_ids = set()
+        if initial_files > 0 and not force_refresh:
+            self.file_db.cursor.execute("SELECT file_id FROM files")
+            existing_file_ids = {row[0] for row in self.file_db.cursor.fetchall()}
 
         total_imported_stats = {
             'files': 0, 'topics': 0, 'users': 0, 'groups': 0,
@@ -992,11 +998,45 @@ class ZSXQFileDownloader:
                     if older_count > 0:
                         self.log(f"   🔄 过滤掉{older_count}个旧数据，只插入{newer_count}个新数据")
                         data['resp_data']['files'] = newer_files
+                        files = newer_files
                         should_stop_after_insert = True
+
+                if existing_file_ids and not force_refresh:
+                    new_files_by_id = []
+                    existing_count = 0
+
+                    for file_info in files:
+                        file_id = file_info.get('file', {}).get('file_id')
+                        if not file_id:
+                            continue
+                        if file_id in existing_file_ids:
+                            existing_count += 1
+                        else:
+                            new_files_by_id.append(file_info)
+
+                    self.log(
+                        f"   📊 去重分析: 新文件{len(new_files_by_id)}个, "
+                        f"已存在{existing_count}个"
+                    )
+
+                    if not new_files_by_id:
+                        self.log("   ✅ 当前页文件均已存在，停止收集")
+                        break
+
+                    if len(new_files_by_id) < len(files):
+                        self.log(f"   🔄 过滤掉{existing_count}个已存在文件，只导入{len(new_files_by_id)}个新文件")
+                        data['resp_data']['files'] = new_files_by_id
+                        files = new_files_by_id
 
                 # 使用完整数据库导入整个API响应
                 try:
                     page_stats = self.file_db.import_file_response(data)
+                    if existing_file_ids and not force_refresh:
+                        existing_file_ids.update(
+                            file_info.get('file', {}).get('file_id')
+                            for file_info in files
+                            if file_info.get('file', {}).get('file_id')
+                        )
 
                     # 累计统计
                     for key in total_imported_stats:

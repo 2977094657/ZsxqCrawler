@@ -2208,6 +2208,37 @@ def run_single_file_download_task(task_id: str, group_id: str, file_id: int):
 
         if result == "skipped":
             add_task_log(task_id, "✅ 文件已存在，跳过下载")
+            actual_file_info = file_info['file']
+            actual_file_name = actual_file_info.get('name', f'file_{file_id}')
+            actual_file_size = actual_file_info.get('size', 0)
+
+            import os
+            safe_filename = "".join(c for c in actual_file_name if c.isalnum() or c in '._-（）()[]{}')
+            if not safe_filename:
+                safe_filename = f"file_{file_id}"
+            local_path = os.path.join(downloader.download_dir, safe_filename)
+
+            if os.path.exists(local_path):
+                actual_file_size = os.path.getsize(local_path)
+
+            downloader.file_db.cursor.execute('''
+                INSERT OR IGNORE INTO files
+                (file_id, name, size, download_status, local_path, download_time, download_count)
+                VALUES (?, ?, ?, 'completed', ?, CURRENT_TIMESTAMP, ?)
+            ''', (file_id, actual_file_name, actual_file_size, local_path,
+                  actual_file_info.get('download_count', 0)))
+            downloader.file_db.cursor.execute('''
+                UPDATE files
+                SET name = ?,
+                    size = ?,
+                    download_status = 'completed',
+                    local_path = ?,
+                    download_time = CURRENT_TIMESTAMP,
+                    download_count = ?
+                WHERE file_id = ?
+            ''', (actual_file_name, actual_file_size, local_path,
+                  actual_file_info.get('download_count', 0), file_id))
+            downloader.file_db.conn.commit()
             update_task(task_id, "completed", "文件已存在")
         elif result:
             add_task_log(task_id, "✅ 文件下载成功")
@@ -2229,11 +2260,22 @@ def run_single_file_download_task(task_id: str, group_id: str, file_id: int):
 
             # 更新或插入文件状态
             downloader.file_db.cursor.execute('''
-                INSERT OR REPLACE INTO files
+                INSERT OR IGNORE INTO files
                 (file_id, name, size, download_status, local_path, download_time, download_count)
-                VALUES (?, ?, ?, 'downloaded', ?, CURRENT_TIMESTAMP, ?)
+                VALUES (?, ?, ?, 'completed', ?, CURRENT_TIMESTAMP, ?)
             ''', (file_id, actual_file_name, actual_file_size, local_path,
                   actual_file_info.get('download_count', 0)))
+            downloader.file_db.cursor.execute('''
+                UPDATE files
+                SET name = ?,
+                    size = ?,
+                    download_status = 'completed',
+                    local_path = ?,
+                    download_time = CURRENT_TIMESTAMP,
+                    download_count = ?
+                WHERE file_id = ?
+            ''', (actual_file_name, actual_file_size, local_path,
+                  actual_file_info.get('download_count', 0), file_id))
             downloader.file_db.conn.commit()
 
             update_task(task_id, "completed", "下载成功")
@@ -2339,6 +2381,37 @@ def run_single_file_download_task_with_info(task_id: str, group_id: str, file_id
 
         if result == "skipped":
             add_task_log(task_id, "✅ 文件已存在，跳过下载")
+            actual_file_info = file_info['file']
+            actual_file_name = actual_file_info.get('name', f'file_{file_id}')
+            actual_file_size = actual_file_info.get('size', 0)
+
+            import os
+            safe_filename = "".join(c for c in actual_file_name if c.isalnum() or c in '._-（）()[]{}')
+            if not safe_filename:
+                safe_filename = f"file_{file_id}"
+            local_path = os.path.join(downloader.download_dir, safe_filename)
+
+            if os.path.exists(local_path):
+                actual_file_size = os.path.getsize(local_path)
+
+            downloader.file_db.cursor.execute('''
+                INSERT OR IGNORE INTO files
+                (file_id, name, size, download_status, local_path, download_time, download_count)
+                VALUES (?, ?, ?, 'completed', ?, CURRENT_TIMESTAMP, ?)
+            ''', (file_id, actual_file_name, actual_file_size, local_path,
+                  actual_file_info.get('download_count', 0)))
+            downloader.file_db.cursor.execute('''
+                UPDATE files
+                SET name = ?,
+                    size = ?,
+                    download_status = 'completed',
+                    local_path = ?,
+                    download_time = CURRENT_TIMESTAMP,
+                    download_count = ?
+                WHERE file_id = ?
+            ''', (actual_file_name, actual_file_size, local_path,
+                  actual_file_info.get('download_count', 0), file_id))
+            downloader.file_db.conn.commit()
             update_task(task_id, "completed", "文件已存在")
         elif result:
             add_task_log(task_id, "✅ 文件下载成功")
@@ -2360,11 +2433,22 @@ def run_single_file_download_task_with_info(task_id: str, group_id: str, file_id
 
             # 更新或插入文件状态
             downloader.file_db.cursor.execute('''
-                INSERT OR REPLACE INTO files
+                INSERT OR IGNORE INTO files
                 (file_id, name, size, download_status, local_path, download_time, download_count)
-                VALUES (?, ?, ?, 'downloaded', ?, CURRENT_TIMESTAMP, ?)
+                VALUES (?, ?, ?, 'completed', ?, CURRENT_TIMESTAMP, ?)
             ''', (file_id, actual_file_name, actual_file_size, local_path,
                   actual_file_info.get('download_count', 0)))
+            downloader.file_db.cursor.execute('''
+                UPDATE files
+                SET name = ?,
+                    size = ?,
+                    download_status = 'completed',
+                    local_path = ?,
+                    download_time = CURRENT_TIMESTAMP,
+                    download_count = ?
+                WHERE file_id = ?
+            ''', (actual_file_name, actual_file_size, local_path,
+                  actual_file_info.get('download_count', 0), file_id))
             downloader.file_db.conn.commit()
 
             update_task(task_id, "completed", "下载成功")
@@ -2978,7 +3062,7 @@ async def get_file_stats(group_id: str):
             file_db.cursor.execute("""
                 SELECT
                     COUNT(*) as total_files,
-                    COUNT(CASE WHEN download_status = 'completed' THEN 1 END) as downloaded,
+                    COUNT(CASE WHEN download_status IN ('completed', 'downloaded') THEN 1 END) as downloaded,
                     COUNT(CASE WHEN download_status = 'pending' THEN 1 END) as pending,
                     COUNT(CASE WHEN download_status = 'failed' THEN 1 END) as failed
                 FROM files
