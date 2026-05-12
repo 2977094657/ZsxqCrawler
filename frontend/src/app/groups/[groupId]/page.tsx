@@ -1135,9 +1135,40 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
 
   // 获取文件状态
   const getFileStatus = useCallback(async (fileId: number, fileName?: string, fileSize?: number) => {
+    const getLocalStatus = async (): Promise<FileStatus | null> => {
+      if (!fileName || fileSize === undefined) {
+        return null;
+      }
+
+      const localStatus = await apiClient.checkLocalFileStatus(groupId, fileName, fileSize) as any;
+      return {
+        file_id: fileId,
+        name: fileName,
+        size: fileSize,
+        download_status: localStatus.is_complete ? 'downloaded' : 'pending',
+        local_exists: localStatus.local_exists,
+        local_size: localStatus.local_size,
+        local_path: localStatus.local_path,
+        is_complete: localStatus.is_complete
+      };
+    };
+
     try {
       // 首先尝试从数据库获取文件状态
       const status = await apiClient.getFileStatus(groupId, fileId) as FileStatus;
+
+      if (status.download_status === 'not_collected') {
+        try {
+          const localStatus = await getLocalStatus();
+          if (localStatus) {
+            setFileStatuses(prev => new Map(prev).set(fileId, localStatus));
+            return localStatus;
+          }
+        } catch (localError) {
+          console.error('检查本地文件失败:', localError);
+        }
+      }
+
       setFileStatuses(prev => new Map(prev).set(fileId, status));
       return status;
     } catch (error) {
@@ -1146,17 +1177,10 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
       // 如果数据库中没有文件，但有文件名和大小，检查本地文件
       if (fileName && fileSize !== undefined) {
         try {
-          const localStatus = await apiClient.checkLocalFileStatus(groupId, fileName, fileSize) as any;
-          const status: FileStatus = {
-            file_id: fileId,
-            name: fileName,
-            size: fileSize,
-            download_status: localStatus.is_complete ? 'downloaded' : 'not_collected',
-            local_exists: localStatus.local_exists,
-            local_size: localStatus.local_size,
-            local_path: localStatus.local_path,
-            is_complete: localStatus.is_complete
-          };
+          const status = await getLocalStatus();
+          if (!status) {
+            throw new Error('Local status unavailable');
+          }
           setFileStatuses(prev => new Map(prev).set(fileId, status));
           return status;
         } catch (localError) {
@@ -1169,7 +1193,7 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
         file_id: fileId,
         name: fileName || '',
         size: fileSize || 0,
-        download_status: 'not_collected',
+        download_status: fileName ? 'pending' : 'not_collected',
         local_exists: false,
         local_size: 0,
         is_complete: false
@@ -1716,11 +1740,6 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                             onClick={async () => {
                               // 点击时检查文件状态
                               const latestStatus = await getFileStatus(file.file_id, file.name, file.size);
-
-                              if (latestStatus?.download_status === 'not_collected') {
-                                toast.error('文件未收集，请先运行文件收集任务');
-                                return;
-                              }
 
                               // 如果文件已经下载完成，显示提示
                               if (latestStatus?.is_complete) {
