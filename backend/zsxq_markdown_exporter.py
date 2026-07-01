@@ -310,7 +310,14 @@ def _append_images(lines: List[str], images: Optional[List[Dict[str, Any]]],
         lines.append("")
 
 
-def _append_files(lines: List[str], files: Optional[List[Dict[str, Any]]]) -> None:
+FileResolver = Callable[[Any, str], Optional[str]]
+
+
+def _append_files(
+    lines: List[str],
+    files: Optional[List[Dict[str, Any]]],
+    file_resolver: Optional[FileResolver] = None,
+) -> None:
     if not files:
         return
     lines.append("")
@@ -318,20 +325,33 @@ def _append_files(lines: List[str], files: Optional[List[Dict[str, Any]]]) -> No
     lines.append("")
     for file_info in files:
         name = file_info.get("name") or f"file_{file_info.get('file_id', '')}"
-        parts = [f"📎 **{name}**"]
+        file_id = file_info.get("file_id")
+
+        local_link = None
+        if file_resolver and file_id is not None:
+            try:
+                local_link = file_resolver(file_id, name)
+            except Exception:
+                local_link = None
+
+        if local_link:
+            label_parts = [f"📎 [{name}]({local_link})"]
+        else:
+            label_parts = [f"📎 **{name}**"]
+
         size = file_info.get("size")
         if size:
             try:
                 size_mb = int(size) / (1024 * 1024)
                 if size_mb >= 1:
-                    parts.append(f"{size_mb:.2f} MB")
+                    label_parts.append(f"{size_mb:.2f} MB")
                 else:
-                    parts.append(f"{int(size) / 1024:.1f} KB")
+                    label_parts.append(f"{int(size) / 1024:.1f} KB")
             except Exception:
-                parts.append(f"{size} bytes")
+                label_parts.append(f"{size} bytes")
         if file_info.get("download_count") is not None:
-            parts.append(f"下载 {file_info.get('download_count')} 次")
-        lines.append(f"- {' · '.join(parts)}")
+            label_parts.append(f"下载 {file_info.get('download_count')} 次")
+        lines.append(f"- {' · '.join(label_parts)}")
 
 
 def _format_meta_inline_for_comment(comment: Dict[str, Any]) -> str:
@@ -401,11 +421,20 @@ def _append_comments(lines: List[str], comments: Optional[List[Dict[str, Any]]],
 
 
 def topic_detail_to_markdown(detail: Dict[str, Any], source_url: Optional[str] = None,
-                             *, asset_resolver: Optional[AssetResolver] = None) -> str:
+                             *, asset_resolver: Optional[AssetResolver] = None,
+                             file_resolver: Optional[FileResolver] = None,
+                             include_comments: bool = True,
+                             article_fetcher: Optional[Callable[[str, str], Optional[str]]] = None) -> str:
     """将话题详情转换为 Markdown，对齐前端展示页的视觉风格。
 
     asset_resolver(url, kind) 用于把远程图片/头像 URL 转换为打包文件的相对路径，
     None 表示直接保留原 URL（导出单 .md 文件时使用）。
+
+    file_resolver(file_id, name) 用于把附件映射为本地相对路径（如 ./files/xxx.pdf），
+    None 表示仅展示文件元信息（名称/大小/下载次数），不生成下载链接。
+
+    article_fetcher(url, title) 用于抓取 topic.article.article_url 的全文 HTML 并转 Markdown，
+    None 表示仅展示关联文章链接。
     """
     title = detail.get("title") or (detail.get("talk") or {}).get("article", {}).get("title") or f"topic_{detail.get('topic_id')}"
     lines: List[str] = []
@@ -473,18 +502,33 @@ def topic_detail_to_markdown(detail: Dict[str, Any], source_url: Optional[str] =
         article_url = article.get("article_url") or article.get("inline_article_url")
         if article_url:
             label = article.get("title") or article_url
-            lines.append(f"🔗 **关联文章**：[{label}]({article_url})")
-            lines.append("")
+            if article_fetcher:
+                content = article_fetcher(article_url, label)
+                if content:
+                    lines.append("")
+                    lines.append("## 📄 关联文章全文")
+                    lines.append(f"> 来源：<{article_url}>")
+                    lines.append("")
+                    lines.append(content)
+                else:
+                    lines.append(f"🔗 **关联文章**：[{label}]({article_url})")
+                    lines.append("")
+            else:
+                lines.append(f"🔗 **关联文章**：[{label}]({article_url})")
+                lines.append("")
         _append_images(lines, talk.get("images"), "图片", asset_resolver)
-        _append_files(lines, talk.get("files"))
+        _append_files(lines, talk.get("files"), file_resolver)
 
-    _append_comments(lines, detail.get("show_comments"), asset_resolver)
+    if include_comments:
+        _append_comments(lines, detail.get("show_comments"), asset_resolver)
 
     return "\n".join(lines).strip() + "\n"
 
 
 def column_topic_detail_to_markdown(detail: Dict[str, Any],
-                                    *, asset_resolver: Optional[AssetResolver] = None) -> str:
+                                    *, asset_resolver: Optional[AssetResolver] = None,
+                                    file_resolver: Optional[FileResolver] = None,
+                                    include_comments: bool = True) -> str:
     """将专栏文章详情转换为 Markdown。"""
     title = detail.get("title") or f"topic_{detail.get('topic_id')}"
     lines: List[str] = [f"# {html_to_markdown(title)}", ""]
@@ -526,8 +570,10 @@ def column_topic_detail_to_markdown(detail: Dict[str, Any],
         lines.append("")
 
     _append_images(lines, detail.get("images"), "图片", asset_resolver)
-    _append_files(lines, detail.get("files"))
-    _append_comments(lines, detail.get("comments"), asset_resolver)
+    _append_files(lines, detail.get("files"), file_resolver)
+    if include_comments:
+        _append_comments(lines, detail.get("comments"), asset_resolver)
+
     return "\n".join(lines).strip() + "\n"
 
 
@@ -571,30 +617,31 @@ def _safe_asset_name(url: str, content_path: Optional[Path] = None) -> str:
     return f"{digest}{ext}"
 
 
-def build_topic_archive(
+def build_topic_staging(
+    staging_dir: str,
     detail: Dict[str, Any],
-    output_zip_path: str,
     *,
     render: Callable[..., str] = topic_detail_to_markdown,
     render_kwargs: Optional[Dict[str, Any]] = None,
     image_downloader: Optional[ImageDownloader] = None,
     md_filename: str = "README.md",
+    assets_subdir: str = "assets",
 ) -> str:
-    """生成包含 Markdown + 资源文件的 zip 归档。
+    """将话题的 Markdown + 资源文件写入指定目录（不打包 ZIP）。
 
-    image_downloader(url) -> Optional[Path]：下载并返回图片本地路径；返回 None 表示失败，
-        此时 MD 中保留远程 URL，避免破坏链接。
-    返回最终 zip 文件的路径。
+    返回生成的 Markdown 文本，供调用方做进一步处理（如追加文件链接、再统一打包等）。
+
+    image_downloader(url) -> Optional[Path]：下载图片并返回本地路径；返回 None 时 MD 保留远程 URL。
     """
     render_kwargs = dict(render_kwargs or {})
-    staging_dir = Path(tempfile.mkdtemp(prefix="zsxq_zip_"))
-    assets_dir = staging_dir / "assets"
+    root = Path(staging_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    assets_dir = root / assets_subdir
     assets_dir.mkdir(parents=True, exist_ok=True)
 
-    # url -> 相对路径 缓存，避免重复下载和命名冲突
     url_to_relpath: Dict[str, str] = {}
 
-    def resolver(url: str, kind: str) -> str:  # kind: avatar / image / file
+    def resolver(url: str, kind: str) -> str:
         if not url:
             return url
         cached = url_to_relpath.get(url)
@@ -609,49 +656,66 @@ def build_topic_archive(
                 local_path = None
 
         if local_path is None or not Path(local_path).exists():
-            # 下载失败 → 退化为远程 URL，仍然记录避免下次重试
             url_to_relpath[url] = url
             return url
 
-        # 复制到 assets/，使用 md5 命名避免冲突；同源同 URL 仅复制一次
         target_name = _safe_asset_name(url, Path(local_path))
         target_path = assets_dir / target_name
         if not target_path.exists():
             try:
                 shutil.copyfile(str(local_path), str(target_path))
             except Exception:
-                # 复制失败时退化为远程 URL
                 url_to_relpath[url] = url
                 return url
 
-        rel = f"./assets/{target_name}"
+        rel = f"./{assets_subdir}/{target_name}"
         url_to_relpath[url] = rel
         return rel
 
-    # 渲染 Markdown
     render_kwargs["asset_resolver"] = resolver
     markdown = render(detail, **render_kwargs)
 
-    # 写 Markdown 文件
-    md_path = staging_dir / md_filename
+    md_path = root / md_filename
     md_path.write_text(markdown, encoding="utf-8")
+    return markdown
 
-    # 打包 zip
-    zip_path = Path(output_zip_path)
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(str(md_path), arcname=md_filename)
-        for asset_file in sorted(assets_dir.iterdir()):
-            if asset_file.is_file():
-                zf.write(str(asset_file), arcname=f"assets/{asset_file.name}")
 
-    # 清理 staging
+def build_topic_archive(
+    detail: Dict[str, Any],
+    output_zip_path: str,
+    *,
+    render: Callable[..., str] = topic_detail_to_markdown,
+    render_kwargs: Optional[Dict[str, Any]] = None,
+    image_downloader: Optional[ImageDownloader] = None,
+    md_filename: str = "README.md",
+) -> str:
+    """生成包含 Markdown + 资源文件的 zip 归档（单话题）。
+
+    内部复用 build_topic_staging() 生成临时目录，然后打包为 ZIP。
+    """
+    staging_dir = str(tempfile.mkdtemp(prefix="zsxq_zip_"))
     try:
-        shutil.rmtree(str(staging_dir), ignore_errors=True)
-    except Exception:
-        pass
+        build_topic_staging(
+            staging_dir,
+            detail,
+            render=render,
+            render_kwargs=render_kwargs,
+            image_downloader=image_downloader,
+            md_filename=md_filename,
+        )
 
-    return str(zip_path.resolve())
+        zip_path = Path(output_zip_path)
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(staging_dir):
+                for file in files:
+                    file_path = Path(root) / file
+                    arcname = str(file_path.relative_to(staging_dir))
+                    zf.write(str(file_path), arcname=arcname)
+
+        return str(zip_path.resolve())
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def write_temp_topic_archive(

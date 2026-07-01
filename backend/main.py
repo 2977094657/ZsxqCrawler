@@ -78,6 +78,7 @@ from .zsxq_markdown_exporter import (
     write_temp_markdown_file,
     write_temp_topic_archive,
 )
+from .zsxq_batch_exporter import ZSXQBatchExporter
 
 # 初始化日志系统
 ensure_configured()
@@ -87,6 +88,7 @@ ensure_configured()
 async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时扫描本地群"""
     # 启动时执行
+    _apply_proxy_config()
     try:
         log_info("应用启动: 开始扫描本地群")
         await asyncio.to_thread(scan_local_groups)
@@ -640,6 +642,28 @@ def close_runtime_handles() -> None:
 
 def _get_output_dir() -> str:
     return LOCAL_OUTPUT_DIR if os.path.isabs(LOCAL_OUTPUT_DIR) else os.path.join(project_root, LOCAL_OUTPUT_DIR)
+
+
+def _apply_proxy_config():
+    """读取 config.toml 中的 [proxy] 配置并设置全局 HTTPS_PROXY 环境变量"""
+    try:
+        config = load_config()
+        if config:
+            proxy_cfg = config.get("proxy", {}) or {}
+            enabled = proxy_cfg.get("enabled", True)
+            proxy_url = (proxy_cfg.get("url") or "").strip()
+            if enabled and proxy_url:
+                os.environ["HTTP_PROXY"] = proxy_url
+                os.environ["HTTPS_PROXY"] = proxy_url
+                os.environ["NO_PROXY"] = "localhost,127.0.0.1"
+                log_info(f"代理已启用: {proxy_url}")
+            else:
+                os.environ.pop("HTTP_PROXY", None)
+                os.environ.pop("HTTPS_PROXY", None)
+                os.environ.pop("NO_PROXY", None)
+                log_info("代理未启用（直连模式）")
+    except Exception:
+        pass
 
 
 def _open_local_topics_db(group_id: str) -> ZSXQDatabase:
@@ -3587,13 +3611,24 @@ async def get_groups():
 
         # 获取“当前账号”的群列表（优先账号默认账号，其次config.toml；若未配置则视为空集合）
         groups_data: List[dict] = []
+        seen_gids: set = set()
         try:
-            primary_cookie = get_primary_cookie()
-            if primary_cookie:
-                groups_data = fetch_groups_from_api(primary_cookie)
+            sources = _get_all_account_sources()
+            for src in sources:
+                cookie = (src.get("cookie") or "").strip()
+                if not cookie or cookie == "your_cookie_here":
+                    continue
+                try:
+                    ag = fetch_groups_from_api(cookie)
+                    for g in ag or []:
+                        gid = g.get("group_id")
+                        if gid and gid not in seen_gids:
+                            seen_gids.add(gid)
+                            groups_data.append(g)
+                except Exception:
+                    continue
         except Exception as e:
-            # 不阻断，记录告警
-            print(f"⚠️ 获取账号群失败，降级为本地集合: {e}")
+            print(f"warning: fetch account groups failed: {e}")
             groups_data = []
 
         # 组装账号侧群为字典（id -> info）
@@ -3920,15 +3955,16 @@ async def export_topic_markdown(topic_id: str, group_id: str,
         article_url = article.get("article_url") or article.get("inline_article_url") or ""
         title = topic_detail.get("title") or article.get("title") or f"topic_{topic_id}"
 
-        # 仅当导出格式为 md 且明确请求拉取外部文章时，才尝试外站抓取
-        external_article_md = ""
-        if format == "md" and fetch_article and article_url:
-            external_article_md = await asyncio.to_thread(
-                _fetch_article_markdown,
-                article_url,
-                crawler.get_stealth_headers(),
-                title,
-            )
+        # 关联文章抓取回调（仅当 fetch_article=true 时启用）
+        def article_fetcher(url: str, link_title: str) -> Optional[str]:
+            if not fetch_article:
+                return None
+            return _fetch_article_markdown(url, crawler.get_stealth_headers(), link_title) or None
+
+        render_kwargs = {
+            "source_url": article_url or None,
+            "article_fetcher": article_fetcher,
+        }
 
         if format == "zip":
             return _download_topic_archive_response(
@@ -3936,22 +3972,154 @@ async def export_topic_markdown(topic_id: str, group_id: str,
                 f"{topic_id}_{title}",
                 group_id=group_id,
                 render=topic_detail_to_markdown,
-                render_kwargs={"source_url": article_url or None},
+                render_kwargs=render_kwargs,
             )
 
-        # 单 .md 模式
-        if external_article_md:
-            markdown = external_article_md.rstrip() + (
-                f"\n\n---\n\nSource: [{article.get('title') or article_url}]({article_url})\n"
-            )
-        else:
-            markdown = topic_detail_to_markdown(topic_detail, source_url=article_url or None)
-
+        markdown = topic_detail_to_markdown(topic_detail, **render_kwargs)
         return _download_markdown_response(markdown, f"{topic_id}_{title}")
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export Markdown failed: {str(e)}")
+
+
+# ========================= 批量导出话题 =========================
+
+class BatchExportRequest(BaseModel):
+    search: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    download_files: bool = True
+    download_images: bool = True
+
+
+def run_batch_export_task(
+    task_id: str,
+    group_id: str,
+    cookie: str,
+    search: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+    download_files: bool,
+    download_images: bool,
+):
+    """后台任务：批量导出话题"""
+    exporter = None
+    try:
+        if is_task_stopped(task_id):
+            return
+
+        update_task(task_id, "running", "正在初始化批量导出...")
+        exporter = ZSXQBatchExporter(group_id, cookie, export_dir=_get_output_dir(), log_callback=lambda msg: add_task_log(task_id, msg))
+        exporter.stop_flag = is_task_stopped(task_id)
+
+        result = exporter.export_batch(
+            keyword=search,
+            start_date=start_date,
+            end_date=end_date,
+            download_files=download_files,
+            download_images=download_images,
+        )
+
+        if is_task_stopped(task_id):
+            update_task(task_id, "cancelled", "批量导出已停止")
+            return
+
+        if result.get("zip_path"):
+            update_task(
+                task_id,
+                "completed",
+                f"批量导出完成: {result['exported']}/{result['total']} 个话题",
+                {
+                    "zip_path": result["zip_path"],
+                    "total": result["total"],
+                    "exported": result["exported"],
+                    "failed": result["failed"],
+                    "download_url": f"/api/groups/{group_id}/topics/export-batch/download?task_id={task_id}",
+                },
+            )
+        else:
+            update_task(
+                task_id,
+                "failed",
+                "批量导出未生成文件（可能没有匹配话题）",
+                result,
+            )
+    except Exception as e:
+        log_error(f"批量导出任务异常: {e}", exception=e)
+        if not is_task_stopped(task_id):
+            update_task(task_id, "failed", f"批量导出失败: {str(e)}")
+    finally:
+        if exporter:
+            try:
+                exporter.close()
+            except Exception:
+                pass
+
+
+@app.post("/api/groups/{group_id}/topics/export-batch")
+async def export_batch_topics(group_id: str, req: BatchExportRequest):
+    """启动批量导出话题任务（异步后台执行）"""
+    try:
+        if not group_id.isdigit():
+            raise HTTPException(status_code=400, detail="社群 ID 格式不正确")
+
+        cookie = get_cookie_for_group(group_id)
+        if not cookie or cookie == "your_cookie_here":
+            raise HTTPException(status_code=400, detail="未找到可用 Cookie，请先配置账号")
+
+        path_manager = get_db_path_manager()
+        db_path = path_manager.get_topics_db_path(group_id)
+        if not os.path.exists(db_path):
+            raise HTTPException(status_code=404, detail=f"群组 {group_id} 本地话题数据库不存在")
+
+        desc = f"批量导出群组 {group_id} 话题"
+        if req.search:
+            desc += f" (关键词: {req.search})"
+        if req.start_date or req.end_date:
+            desc += f" ({req.start_date or '不限'} ~ {req.end_date or '不限'})"
+
+        task_id = create_task("batch_export", desc)
+        current_tasks[task_id]["group_id"] = group_id
+
+        import threading
+        thread = threading.Thread(
+            target=run_batch_export_task,
+            args=(task_id, group_id, cookie, req.search, req.start_date, req.end_date,
+                  req.download_files, req.download_images),
+            daemon=True,
+        )
+        thread.start()
+
+        return {"task_id": task_id, "message": "批量导出任务已启动"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"启动批量导出失败: {str(e)}")
+
+
+@app.get("/api/groups/{group_id}/topics/export-batch/download")
+async def download_batch_export(group_id: str, task_id: str):
+    """下载已完成的批量导出 ZIP 文件"""
+    if task_id not in current_tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    task = current_tasks[task_id]
+    if task["status"] != "completed":
+        raise HTTPException(status_code=400, detail=f"任务尚未完成 (当前状态: {task['status']})")
+
+    result = task.get("result") or {}
+    zip_path = result.get("zip_path")
+    if not zip_path or not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="导出文件不存在或已被清理")
+
+    filename = f"zsxq_batch_export_{group_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(lambda: os.path.exists(zip_path) and os.remove(zip_path)),
+    )
 
 
 @app.post("/api/topics/{topic_id}/{group_id}/refresh")

@@ -457,6 +457,32 @@ class ApiClient {
     return `${this.baseUrl}/api/topics/${id}/${groupId}/export-md?${params.toString()}`;
   }
 
+  async startBatchExport(
+    groupId: number | string,
+    params: {
+      search?: string;
+      start_date?: string;
+      end_date?: string;
+      download_files?: boolean;
+      download_images?: boolean;
+    }
+  ): Promise<TaskCreateResponse> {
+    return this.request(`/api/groups/${groupId}/topics/export-batch`, {
+      method: 'POST',
+      body: JSON.stringify({
+        search: params.search || null,
+        start_date: params.start_date || null,
+        end_date: params.end_date || null,
+        download_files: params.download_files ?? true,
+        download_images: params.download_images ?? true,
+      }),
+    });
+  }
+
+  getBatchExportDownloadUrl(groupId: number | string, taskId: string): string {
+    return `${this.baseUrl}/api/groups/${groupId}/topics/export-batch/download?task_id=${encodeURIComponent(taskId)}`;
+  }
+
   async deleteSingleTopic(groupId: number | string, topicId: number | string) {
     return this.request(`/api/topics/${topicId}/${groupId}`, {
       method: 'DELETE',

@@ -334,7 +334,14 @@ const [gapDialogOpen, setGapDialogOpen] = useState<boolean>(false);
 const [gapCandidates, setGapCandidates] = useState<GapCandidate[]>([]);
 const [gapCandidatesLoading, setGapCandidatesLoading] = useState<boolean>(false);
 const [selectedGapIndex, setSelectedGapIndex] = useState<number | null>(null);
-const [downloadTimeDialogOpen, setDownloadTimeDialogOpen] = useState<boolean>(false);
+  const [downloadTimeDialogOpen, setDownloadTimeDialogOpen] = useState<boolean>(false);
+
+  // 批量导出状态
+  const [batchExportDialogOpen, setBatchExportDialogOpen] = useState<boolean>(false);
+  const [batchExportStartDate, setBatchExportStartDate] = useState<string>('');
+  const [batchExportEndDate, setBatchExportEndDate] = useState<string>('');
+  const [batchExportLoading, setBatchExportLoading] = useState<boolean>(false);
+  const [batchExportTaskId, setBatchExportTaskId] = useState<string | null>(null);
 
   const hasLocalTopics = (groupStats?.topics_count || 0) > 0;
   const allCrawlLabel = hasLocalTopics ? '继续爬取' : '全量爬取';
@@ -1103,6 +1110,55 @@ const [downloadTimeDialogOpen, setDownloadTimeDialogOpen] = useState<boolean>(fa
     setNavigatingToColumns(true);
     router.push(`/groups/${groupId}/columns`);
   };
+
+  // 批量导出话题
+  const handleBatchExport = async () => {
+    setBatchExportLoading(true);
+    setBatchExportTaskId(null);
+    try {
+      const response = await apiClient.startBatchExport(groupId, {
+        search: searchTerm || undefined,
+        start_date: batchExportStartDate || undefined,
+        end_date: batchExportEndDate || undefined,
+        download_files: true,
+        download_images: true,
+      });
+      setBatchExportTaskId(response.task_id);
+      setBatchExportDialogOpen(false);
+      setCurrentTaskId(response.task_id);
+      setActiveTab('logs');
+      toast.success('批量导出任务已启动，请在任务日志中查看进度');
+    } catch (error: any) {
+      toast.error(error?.message || '启动批量导出失败');
+      console.error('批量导出失败:', error);
+    } finally {
+      setBatchExportLoading(false);
+    }
+  };
+
+  // 批量导出任务完成后自动下载
+  useEffect(() => {
+    if (!batchExportTaskId) return;
+    const poll = setInterval(async () => {
+      try {
+        const task = await apiClient.getTask(batchExportTaskId);
+        if (task.status === 'completed' && task.result?.download_url) {
+          clearInterval(poll);
+          setBatchExportTaskId(null);
+          const url = apiClient.getBatchExportDownloadUrl(groupId, task.task_id);
+          window.open(url, '_blank');
+          toast.success(`导出完成: ${task.result.exported}/${task.result.total} 个话题`);
+        } else if (task.status === 'failed' || task.status === 'cancelled') {
+          clearInterval(poll);
+          setBatchExportTaskId(null);
+          toast.error(task.message || '批量导出失败');
+        }
+      } catch {
+        // 忽略轮询错误
+      }
+    }, 2000);
+    return () => clearInterval(poll);
+  }, [batchExportTaskId, groupId]);
 
   // 清空图片缓存（使用自定义弹窗，不再重复浏览器确认）
   const clearImageCache = async () => {
@@ -2151,6 +2207,96 @@ const [downloadTimeDialogOpen, setDownloadTimeDialogOpen] = useState<boolean>(fa
             <Button onClick={() => loadTopics()} disabled={topicsLoading}>
               {topicsLoading ? '加载中...' : '刷新'}
             </Button>
+            <Dialog open={batchExportDialogOpen} onOpenChange={setBatchExportDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex items-center gap-2 whitespace-nowrap bg-emerald-50 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-100 text-emerald-700"
+                  disabled={!!batchExportTaskId}
+                >
+                  {batchExportTaskId ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  批量导出
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>批量导出话题</DialogTitle>
+                  <DialogDescription>
+                    导出当前搜索条件匹配的话题（含 Markdown 正文 + 图片 + 附件文件）为 ZIP 包
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">搜索关键词</label>
+                    <Input
+                      placeholder={searchTerm || '（不输入则导出全部）'}
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="text-sm"
+                    />
+                    <p className="text-xs text-gray-500">
+                      匹配话题标题、问题正文、讨论正文
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">日期范围（可选）</label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="date"
+                        value={batchExportStartDate}
+                        onChange={(e) => setBatchExportStartDate(e.target.value)}
+                        className="text-sm flex-1"
+                      />
+                      <span className="text-gray-400 text-sm">~</span>
+                      <Input
+                        type="date"
+                        value={batchExportEndDate}
+                        onChange={(e) => setBatchExportEndDate(e.target.value)}
+                        className="text-sm flex-1"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500">按话题创建时间过滤，留空则不限</p>
+                  </div>
+                  {batchExportTaskId && (
+                    <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 rounded-md p-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>正在导出中，完成后自动下载...</span>
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setBatchExportDialogOpen(false)}
+                    disabled={batchExportLoading || !!batchExportTaskId}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    onClick={handleBatchExport}
+                    disabled={batchExportLoading || !!batchExportTaskId}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  >
+                    {batchExportLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                        启动中...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="h-4 w-4 mr-1" />
+                        开始导出
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
 
           {/* 图片缓存管理 */}
