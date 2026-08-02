@@ -266,6 +266,13 @@ export interface AccountSelf {
   raw_json?: any;
 }
 
+export interface WebAuthStatus {
+  job_id: string;
+  status: 'starting' | 'awaiting_login' | 'completed' | 'failed' | 'cancelled' | 'expired';
+  message: string;
+  account?: Account;
+}
+
 export interface GapCandidate {
   gap_index: number;
   sequence_index: number;
@@ -825,6 +832,23 @@ class ApiClient {
         cookie: params.cookie,
         name: params.name,
       }),
+    });
+  }
+
+  async startWebAuth(name?: string): Promise<WebAuthStatus> {
+    return this.request('/api/auth/web/start', {
+      method: 'POST',
+      body: JSON.stringify({ name: name?.trim() || null }),
+    });
+  }
+
+  async getWebAuthStatus(jobId: string): Promise<WebAuthStatus> {
+    return this.request(`/api/auth/web/${jobId}`);
+  }
+
+  async cancelWebAuth(jobId: string): Promise<WebAuthStatus> {
+    return this.request(`/api/auth/web/${jobId}`, {
+      method: 'DELETE',
     });
   }
 

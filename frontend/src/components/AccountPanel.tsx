@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { apiClient, Account, AccountSelf } from '@/lib/api';
+import { apiClient, Account, AccountSelf, WebAuthStatus } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,13 @@ export default function AccountPanel() {
   const [createOpen, setCreateOpen] = useState<boolean>(false);
   const [name, setName] = useState<string>('');
   const [cookie, setCookie] = useState<string>('');
+
+  // 官方网页登录弹窗
+  const [webAuthOpen, setWebAuthOpen] = useState<boolean>(false);
+  const [webAuthName, setWebAuthName] = useState<string>('');
+  const [webAuthStarting, setWebAuthStarting] = useState<boolean>(false);
+  const [webAuthJobId, setWebAuthJobId] = useState<string | null>(null);
+  const [webAuthStatus, setWebAuthStatus] = useState<WebAuthStatus | null>(null);
 
   const loadAccounts = async () => {
     setLoading(true);
@@ -60,6 +67,69 @@ export default function AccountPanel() {
   useEffect(() => {
     loadAccounts();
   }, []);
+
+  useEffect(() => {
+    if (!webAuthJobId) return;
+
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const status = await apiClient.getWebAuthStatus(webAuthJobId);
+        if (disposed) return;
+        setWebAuthStatus(status);
+
+        if (status.status === 'completed') {
+          setWebAuthJobId(null);
+          toast.success('网页登录成功，账号已自动导入');
+          await loadAccounts();
+          setWebAuthOpen(false);
+          setWebAuthName('');
+        } else if (['failed', 'cancelled', 'expired'].includes(status.status)) {
+          setWebAuthJobId(null);
+          if (status.status !== 'cancelled') toast.error(status.message);
+        }
+      } catch (e: any) {
+        if (!disposed) {
+          setWebAuthJobId(null);
+          toast.error(`读取登录状态失败: ${e?.message || '未知错误'}`);
+        }
+      }
+    };
+
+    void poll();
+    const timer = window.setInterval(() => void poll(), 1500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [webAuthJobId]);
+
+  const handleStartWebAuth = async () => {
+    setWebAuthStarting(true);
+    try {
+      const status = await apiClient.startWebAuth(webAuthName.trim() || undefined);
+      setWebAuthStatus(status);
+      setWebAuthJobId(status.job_id);
+    } catch (e: any) {
+      toast.error(`无法启动网页登录: ${e?.message || '未知错误'}`);
+    } finally {
+      setWebAuthStarting(false);
+    }
+  };
+
+  const handleCancelWebAuth = async () => {
+    const jobId = webAuthJobId;
+    setWebAuthJobId(null);
+    if (jobId) {
+      try {
+        await apiClient.cancelWebAuth(jobId);
+      } catch {
+        // 登录窗口可能已经由用户关闭，无需重复提示。
+      }
+    }
+    setWebAuthStatus(null);
+    setWebAuthOpen(false);
+  };
 
   const handleCreate = async () => {
     if (!cookie.trim()) {
@@ -120,8 +190,17 @@ export default function AccountPanel() {
             <CardTitle>账号管理</CardTitle>
             <CardDescription>管理知识星球账号，支持刷新与删除操作</CardDescription>
           </div>
-          <div>
-            <Button variant="default" onClick={() => setCreateOpen(true)}>添加账号</Button>
+          <div className="flex gap-2">
+            <Button
+              variant="default"
+              onClick={() => {
+                setWebAuthStatus(null);
+                setWebAuthOpen(true);
+              }}
+            >
+              网页登录
+            </Button>
+            <Button variant="outline" onClick={() => setCreateOpen(true)}>手动添加 Cookie</Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -229,6 +308,50 @@ export default function AccountPanel() {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>取消</Button>
             <Button onClick={handleCreate} disabled={creating || !cookie.trim()} className="min-w-24">
               {creating ? '提交中...' : '添加账号'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={webAuthOpen}
+        onOpenChange={(open) => {
+          if (!open) void handleCancelWebAuth();
+          else setWebAuthOpen(true);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>知识星球网页登录</DialogTitle>
+            <DialogDescription>
+              将打开知识星球官方页面。请在官方页面使用微信扫码或手机号验证码登录，成功后账号会自动导入。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="web-auth-name">账号名称（可选）</Label>
+              <Input
+                id="web-auth-name"
+                placeholder="例如：个人号"
+                value={webAuthName}
+                onChange={(e) => setWebAuthName(e.target.value)}
+                disabled={Boolean(webAuthJobId)}
+              />
+            </div>
+            <div className="rounded-md border bg-muted/40 p-3 text-sm">
+              {webAuthStatus?.message || '点击开始后，在弹出的官方登录窗口完成登录。登录凭据只保存在本机。'}
+            </div>
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => void handleCancelWebAuth()}>
+              {webAuthJobId ? '取消登录' : '关闭'}
+            </Button>
+            <Button
+              onClick={() => void handleStartWebAuth()}
+              disabled={webAuthStarting || Boolean(webAuthJobId)}
+              className="min-w-24"
+            >
+              {webAuthStarting ? '启动中...' : webAuthJobId ? '等待登录...' : '开始网页登录'}
             </Button>
           </DialogFooter>
         </DialogContent>
