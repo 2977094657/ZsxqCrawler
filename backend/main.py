@@ -13,6 +13,7 @@ import io
 import posixpath
 import sqlite3
 import tempfile
+import threading
 import zipfile
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -48,6 +49,7 @@ from .image_cache_manager import get_image_cache_manager
 # 使用SQL账号管理器
 from .accounts_sql_manager import get_accounts_sql_manager
 from .account_info_db import get_account_info_db
+from .web_auth_manager import WebAuthManager
 from .zsxq_columns_database import ZSXQColumnsDatabase
 from .logger_config import (
     bind_context,
@@ -325,6 +327,9 @@ class ColumnsSettingsRequest(BaseModel):
 
 class AccountCreateRequest(BaseModel):
     cookie: str = Field(..., description="账号Cookie")
+    name: Optional[str] = Field(default=None, description="账号名称")
+
+class WebAuthStartRequest(BaseModel):
     name: Optional[str] = Field(default=None, description="账号名称")
 
 class AssignGroupAccountRequest(BaseModel):
@@ -1784,6 +1789,54 @@ async def reset_all_local_data():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"重置全部本地数据失败: {str(e)}")
 
+# 网页登录仅允许本机调用，避免局域网中的其他设备触发登录窗口。
+def _require_loopback_request(request: Request) -> None:
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(status_code=403, detail="网页登录只能在运行本项目的电脑上发起")
+
+
+def _import_web_authenticated_account(
+    cookie: str,
+    requested_name: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Validate a browser session against the official API, then save it."""
+    try:
+        headers = build_stealth_headers(cookie)
+        response = requests.get(
+            "https://api.zsxq.com/v3/users/self",
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("succeeded"):
+            return None
+
+        response_data = payload.get("resp_data", {}) or {}
+        user = response_data.get("user", {}) or {}
+        wechat = (response_data.get("accounts", {}) or {}).get("wechat", {}) or {}
+        account_name = requested_name or user.get("name") or wechat.get("name") or "网页登录账号"
+
+        sql_mgr = get_accounts_sql_manager()
+        account = sql_mgr.add_account(cookie, account_name)
+        account_id = account.get("id")
+        clear_account_detect_cache()
+        if account_id:
+            threading.Thread(
+                target=_fetch_and_store_account_self,
+                args=(account_id, cookie),
+                daemon=True,
+            ).start()
+        return sql_mgr.get_account_by_id(account_id, mask_cookie=True)
+    except Exception as exc:
+        log_debug(f"网页登录会话尚未通过验证: {exc}")
+        return None
+
+
+web_auth_manager = WebAuthManager(_import_web_authenticated_account)
+
+
 # 账号管理 API
 @app.get("/api/accounts")
 async def list_accounts():
@@ -1821,6 +1874,34 @@ async def create_account(request: AccountCreateRequest):
         return {"account": safe_acc}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create account: {str(e)}")
+
+
+@app.post("/api/auth/web/start")
+async def start_web_auth(request: Request, payload: WebAuthStartRequest):
+    """Open an isolated official Knowledge Planet login window on this computer."""
+    _require_loopback_request(request)
+    try:
+        return web_auth_manager.start(payload.name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/auth/web/{job_id}")
+async def get_web_auth_status(job_id: str, request: Request):
+    _require_loopback_request(request)
+    job = web_auth_manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="网页登录任务不存在")
+    return job
+
+
+@app.delete("/api/auth/web/{job_id}")
+async def cancel_web_auth(job_id: str, request: Request):
+    _require_loopback_request(request)
+    job = web_auth_manager.cancel(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="网页登录任务不存在")
+    return job
 
 @app.delete("/api/accounts/{account_id}")
 async def remove_account(account_id: str):
